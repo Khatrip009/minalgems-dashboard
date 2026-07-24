@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './contexts/AuthContext'
 import { ConfigProvider } from 'antd'
 import ProtectedRoute from './components/ProtectedRoute'
@@ -14,7 +14,7 @@ import Customers from './pages/Customers'
 import CustomerDetail from './pages/CustomerDetail'
 import Craftsmen from './pages/Craftsmen'
 import CraftsmanDetail from './pages/CraftsmanDetail'
-import Payments from './pages/Payments' 
+import Payments from './pages/Payments'
 import Settings from './pages/Settings'
 import Users from './pages/Users'
 import Profile from './pages/Profile'
@@ -44,36 +44,32 @@ export default function App() {
     <ConfigProvider
       theme={{
         token: themeTokens,
-        // You can override specific component styles here later if needed
       }}
     >
       <AuthProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-              <Route index element={<Dashboard />} />
-              <Route path="products" element={<Products />} />
-              <Route path="products/new" element={<ProductCreate />} />
-              <Route path="categories" element={<Categories />} />
-              <Route path="orders" element={<Orders />} />
-              <Route path="orders/:id" element={<OrderDetail />} />
-              <Route path="customers" element={<Customers />} />
-              <Route path="customers/:id" element={<CustomerDetail />} />
-              <Route path="craftsmen" element={<Craftsmen />} />
-               <Route path="craftsmen/:id" element={<CraftsmanDetail />} /> 
-               <Route path="payments" element={<Payments />} />
-               <Route path="settings" element={<Settings />} />
-               <Route path="/users" element={<Users />} />
-               <Route path="/profile" element={<Profile />} />
-               <Route path="/hero-slides" element={<HeroSlides />} />
-               <Route path="/payment-evaluation" element={<PaymentEvaluation />} />
-               <Route path="/returns" element={<Returns />} />
-               <Route path="/reviews" element={<Reviews />} />
-
-            </Route>
-          </Routes>
-        </BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
+            <Route index element={<Dashboard />} />
+            <Route path="products" element={<Products />} />
+            <Route path="products/new" element={<ProductCreate />} />
+            <Route path="categories" element={<Categories />} />
+            <Route path="orders" element={<Orders />} />
+            <Route path="orders/:id" element={<OrderDetail />} />
+            <Route path="customers" element={<Customers />} />
+            <Route path="customers/:id" element={<CustomerDetail />} />
+            <Route path="craftsmen" element={<Craftsmen />} />
+            <Route path="craftsmen/:id" element={<CraftsmanDetail />} />
+            <Route path="payments" element={<Payments />} />
+            <Route path="settings" element={<Settings />} />
+            <Route path="users" element={<Users />} />
+            <Route path="profile" element={<Profile />} />
+            <Route path="hero-slides" element={<HeroSlides />} />
+            <Route path="payment-evaluation" element={<PaymentEvaluation />} />
+            <Route path="returns" element={<Returns />} />
+            <Route path="reviews" element={<Reviews />} />
+          </Route>
+        </Routes>
       </AuthProvider>
     </ConfigProvider>
   )
