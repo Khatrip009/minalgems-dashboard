@@ -13,6 +13,7 @@ import {
   BellOutlined, SettingOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
   UserOutlined, DollarOutlined, MenuOutlined,PictureOutlined,SwapOutlined,StarOutlined
 } from '@ant-design/icons'
+import InstallBanner from '../components/InstallBanner'
 
 const { Header, Sider, Content, Footer } = Layout
 const { Text, Title } = Typography
@@ -176,6 +177,7 @@ export default function AppLayout() {
   )
 
   return (
+    <> <InstallBanner />
     <Layout style={{ minHeight: '100vh' }}>
       {/* Desktop Sidebar */}
       {!isMobile && (
@@ -309,5 +311,6 @@ export default function AppLayout() {
         </Footer>
       </Layout>
     </Layout>
+    </>
   )
 }

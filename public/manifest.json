@@ -1,0 +1,15 @@
+{
+  "name": "Minal Gems Admin",
+  "short_name": "Minal Admin",
+  "start_url": "/minalgems-dashboard/",
+  "display": "standalone",
+  "background_color": "#1a1a1a",
+  "theme_color": "#B8860B",
+  "icons": [
+    {
+      "src": "/minal_gems_logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
