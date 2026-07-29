@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-   "homepage": "https://admin.minalgem.com",
+  "homepage": "https://admin.minalgem.com",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -17,6 +17,7 @@
     "dayjs": "^1.11.21",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
+    "pdfmake": "^0.3.11",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.1",

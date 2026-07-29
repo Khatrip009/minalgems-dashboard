@@ -1,3 +1,4 @@
+// CraftsmanDetail.jsx
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
@@ -30,11 +31,14 @@ import {
   DollarOutlined,
   ToolOutlined,
   MoreOutlined,
+  DownloadOutlined,
 } from '@ant-design/icons'
 import { supabase } from '../lib/supabase'
+import { generateStatementPdf } from '../utilities/craftsmanStatementPdf'
 import dayjs from 'dayjs'
 
 const { Title, Text } = Typography
+const { RangePicker } = DatePicker
 
 export default function CraftsmanDetail() {
   const { id } = useParams()
@@ -43,17 +47,40 @@ export default function CraftsmanDetail() {
   const [activeTab, setActiveTab] = useState('issues')
   const [loading, setLoading] = useState(false)
 
-  // Data for each table
+  // --- Date range filters ---
+  const [dateRange, setDateRange] = useState(null) // [dayjs, dayjs] or null
+
+  // --- Raw (unfiltered) data from database ---
+  const [allIssues, setAllIssues] = useState([])
+  const [allReturns, setAllReturns] = useState([])
+  const [allConsumptions, setAllConsumptions] = useState([])
+  const [allPayments, setAllPayments] = useState([])
+
+  // --- Filtered data used for tables & PDF ---
   const [issues, setIssues] = useState([])
   const [returns, setReturns] = useState([])
   const [consumptions, setConsumptions] = useState([])
   const [payments, setPayments] = useState([])
 
-  // Modal state
+  // --- Modal state ---
   const [modalOpen, setModalOpen] = useState(false)
   const [modalType, setModalType] = useState('')
   const [editingRecord, setEditingRecord] = useState(null)
   const [form] = Form.useForm()
+
+  const [organization, setOrganization] = useState(null);
+
+useEffect(() => {
+  const fetchOrg = async () => {
+    const { data } = await supabase
+      .from('organizations')
+      .select('*')
+      .limit(1)
+      .single();
+    setOrganization(data);
+  };
+  fetchOrg();
+}, []);
 
   // Fetch craftsman details
   const fetchCraftsman = async () => {
@@ -61,7 +88,7 @@ export default function CraftsmanDetail() {
     setCraftsman(data)
   }
 
-  // Fetch all data based on active tab
+  // Fetch all raw data
   const fetchData = async () => {
     setLoading(true)
 
@@ -91,10 +118,15 @@ export default function CraftsmanDetail() {
         .order('payment_date', { ascending: false }),
     ])
 
-    setIssues(iss.data || [])
-    setReturns(ret.data || [])
-    setConsumptions(cons.data || [])
-    setPayments(pay.data || [])
+    const rawIssues = iss.data || []
+    const rawReturns = ret.data || []
+    const rawConsumptions = cons.data || []
+    const rawPayments = pay.data || []
+
+    setAllIssues(rawIssues)
+    setAllReturns(rawReturns)
+    setAllConsumptions(rawConsumptions)
+    setAllPayments(rawPayments)
 
     setLoading(false)
   }
@@ -104,7 +136,58 @@ export default function CraftsmanDetail() {
     fetchData()
   }, [id])
 
-  // Open modal for adding
+  // Apply date filtering whenever raw data or date range changes
+  useEffect(() => {
+    if (!dateRange || dateRange.length !== 2) {
+      setIssues(allIssues)
+      setReturns(allReturns)
+      setConsumptions(allConsumptions)
+      setPayments(allPayments)
+      return
+    }
+
+    const [start, end] = dateRange
+    if (!start || !end) {
+      setIssues(allIssues)
+      setReturns(allReturns)
+      setConsumptions(allConsumptions)
+      setPayments(allPayments)
+      return
+    }
+
+    const startStr = start.format('YYYY-MM-DD')
+    const endStr = end.format('YYYY-MM-DD')
+
+    const filterByDate = (arr, dateField) =>
+      arr.filter((item) => {
+        const d = item[dateField]
+        return d >= startStr && d <= endStr
+      })
+
+    setIssues(filterByDate(allIssues, 'issue_date'))
+    setReturns(filterByDate(allReturns, 'return_date'))
+    setConsumptions(filterByDate(allConsumptions, 'consumption_date'))
+    setPayments(filterByDate(allPayments, 'payment_date'))
+  }, [allIssues, allReturns, allConsumptions, allPayments, dateRange])
+
+  
+  // --- PDF export ---
+const handleDownloadStatement = () => {
+  const startStr = dateRange?.[0]?.format('YYYY-MM-DD') || '';
+  const endStr = dateRange?.[1]?.format('YYYY-MM-DD') || '';
+  generateStatementPdf(
+    craftsman,
+    issues,
+    returns,
+    consumptions,
+    payments,
+    startStr,
+    endStr,
+    organization   // <-- pass it here
+  );
+};
+
+  // --- Modal handlers (unchanged) ---
   const openAddModal = (type) => {
     setModalType(type)
     setEditingRecord(null)
@@ -112,7 +195,6 @@ export default function CraftsmanDetail() {
     setModalOpen(true)
   }
 
-  // Open modal for editing
   const openEditModal = (type, record) => {
     setModalType(type)
     setEditingRecord(record)
@@ -126,7 +208,6 @@ export default function CraftsmanDetail() {
     setModalOpen(true)
   }
 
-  // Delete a record
   const handleDelete = async (type, recordId) => {
     const tableMap = {
       issue: 'craftsman_gold_issues',
@@ -138,77 +219,92 @@ export default function CraftsmanDetail() {
     if (error) message.error('Delete failed')
     else {
       message.success('Deleted')
-      fetchData()
+      fetchData() // refresh raw data
     }
   }
 
-  // Submit form
   const handleSubmit = async () => {
-    const values = await form.validateFields()
+    const values = await form.validateFields();
     const tableMap = {
       issue: 'craftsman_gold_issues',
       return: 'craftsman_gold_returns',
       consumption: 'craftsman_gold_consumptions',
       payment: 'craftsman_cash_payments',
-    }
+    };
 
-    let payload = { craftsman_id: id }
+    let payload = { craftsman_id: id };
 
     switch (modalType) {
       case 'issue':
-        payload.issue_date = values.issue_date?.format('YYYY-MM-DD')
-        payload.quantity_24kt = values.quantity_24kt
-        if (values.remark) payload.remark = values.remark
-        if (values.reference_no) payload.reference_no = values.reference_no
-        break
+        payload.issue_date = values.issue_date?.format('YYYY-MM-DD');
+        payload.quantity_24kt = values.quantity_24kt;
+        if (values.remark) payload.remark = values.remark;
+        if (values.reference_no) payload.reference_no = values.reference_no;
+        break;
+
       case 'return':
-        payload.return_date = values.return_date?.format('YYYY-MM-DD')
-        payload.quantity_24kt = values.quantity_24kt
-        if (values.remark) payload.remark = values.remark
-        if (values.reference_no) payload.reference_no = values.reference_no
-        break
+        payload.return_date = values.return_date?.format('YYYY-MM-DD');
+        payload.quantity_24kt = values.quantity_24kt;
+        if (values.remark) payload.remark = values.remark;
+        if (values.reference_no) payload.reference_no = values.reference_no;
+        break;
+
       case 'consumption':
-        payload.consumption_date = values.consumption_date?.format('YYYY-MM-DD')
-        payload.gold_weight = values.gold_weight
-        payload.carat = values.carat
-        payload.conversion_percentage = values.conversion_percentage
-        payload.final_gold_24kt = values.final_gold_24kt || 0
-        payload.labour_amount = values.labour_amount || 0
-        if (values.item_no) payload.item_no = values.item_no
-        if (values.remark) payload.remark = values.remark
-        if (values.reference_no) payload.reference_no = values.reference_no
-        break
+        payload.consumption_date = values.consumption_date?.format('YYYY-MM-DD');
+        payload.gold_weight = values.gold_weight;
+        payload.carat = values.carat;
+        payload.conversion_percentage = values.conversion_percentage;
+
+        // ✅ Handle final_gold_24kt:
+        // - If user filled a value → send it (manual override)
+        // - If user cleared the field (null) → send null so trigger recalculates
+        // - If creating and not touched → omit field (trigger will compute)
+        if (values.final_gold_24kt !== undefined) {
+          payload.final_gold_24kt = values.final_gold_24kt;   // can be a number or null
+        } else if (editingRecord) {
+          // Editing existing record, field was cleared → force recalculation
+          payload.final_gold_24kt = null;
+        }
+        // else: creating new and no override – omit field, trigger handles it
+
+        payload.labour_amount = values.labour_amount || 0;
+        if (values.item_no) payload.item_no = values.item_no;
+        if (values.remark) payload.remark = values.remark;
+        if (values.reference_no) payload.reference_no = values.reference_no;
+        break;
+
       case 'payment':
-        payload.payment_date = values.payment_date?.format('YYYY-MM-DD')
-        payload.amount = values.amount
-        if (values.remark) payload.remark = values.remark
-        if (values.reference_no) payload.reference_no = values.reference_no
-        break
+        payload.payment_date = values.payment_date?.format('YYYY-MM-DD');
+        payload.amount = values.amount;
+        if (values.remark) payload.remark = values.remark;
+        if (values.reference_no) payload.reference_no = values.reference_no;
+        break;
+
       default:
-        return
+        return;
     }
 
     if (editingRecord) {
-      const { error } = await supabase.from(tableMap[modalType]).update(payload).eq('id', editingRecord.id)
-      if (error) return message.error('Update failed')
-      message.success('Updated')
+      const { error } = await supabase.from(tableMap[modalType]).update(payload).eq('id', editingRecord.id);
+      if (error) return message.error('Update failed');
+      message.success('Updated');
     } else {
-      const { error } = await supabase.from(tableMap[modalType]).insert([payload])
-      if (error) return message.error('Insert failed')
-      message.success('Added')
+      const { error } = await supabase.from(tableMap[modalType]).insert([payload]);
+      if (error) return message.error('Insert failed');
+      message.success('Added');
     }
-    setModalOpen(false)
-    fetchData()
-  }
-
-  // Balance calculations
+    setModalOpen(false);
+    fetchData(); // refresh raw data
+  };
+  
+  // --- Balance calculations (using filtered data) ---
   const totalIssued = issues.reduce((s, i) => s + Number(i.quantity_24kt), 0)
   const totalReturned = returns.reduce((s, r) => s + Number(r.quantity_24kt), 0)
   const totalConsumed = consumptions.reduce((s, c) => s + Number(c.final_gold_24kt), 0)
   const totalLabour = consumptions.reduce((s, c) => s + Number(c.labour_amount), 0)
   const totalPaid = payments.reduce((s, p) => s + Number(p.amount), 0)
 
-  // Common column helpers
+  // --- Table columns (unchanged except now use filtered data) ---
   const dateColumn = (dataIndex) => ({
     title: 'Date',
     dataIndex,
@@ -219,7 +315,6 @@ export default function CraftsmanDetail() {
   const remarkColumn = { title: 'Remark', dataIndex: 'remark', key: 'remark', responsive: ['md'] }
   const referenceColumn = { title: 'Ref No', dataIndex: 'reference_no', key: 'reference_no', responsive: ['lg'] }
 
-  // Action column with responsive dropdown
   const actionColumn = (type) => ({
     title: 'Actions',
     key: 'actions',
@@ -228,8 +323,8 @@ export default function CraftsmanDetail() {
       const menu = {
         items: [
           { key: 'edit', icon: <EditOutlined />, label: 'Edit', onClick: () => openEditModal(type, record) },
-          { key: 'delete', icon: <DeleteOutlined />, label: 'Delete', danger: true, onClick: () => { 
-            Modal.confirm({ title: 'Delete?', onOk: () => handleDelete(type, record.id) }) 
+          { key: 'delete', icon: <DeleteOutlined />, label: 'Delete', danger: true, onClick: () => {
+            Modal.confirm({ title: 'Delete?', onOk: () => handleDelete(type, record.id) })
           }},
         ],
       }
@@ -259,7 +354,6 @@ export default function CraftsmanDetail() {
     },
   })
 
-  // Columns for each table
   const issueColumns = [
     dateColumn('issue_date'),
     { title: 'Qty (24kt)', dataIndex: 'quantity_24kt', key: 'quantity_24kt', render: (v) => `${v} g` },
@@ -297,7 +391,7 @@ export default function CraftsmanDetail() {
     actionColumn('payment'),
   ]
 
-  // Modal form rendering – all fields responsive
+  // --- Modal form ---
   const renderForm = () => {
     const commonDate = (name, label) => (
       <Form.Item name={name} label={label} rules={[{ required: true }]}>
@@ -382,6 +476,7 @@ export default function CraftsmanDetail() {
     }
   }
 
+  // --- Tabs ---
   const tabItems = [
     {
       key: 'issues',
@@ -467,13 +562,44 @@ export default function CraftsmanDetail() {
 
   return (
     <div>
-      <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/craftsmen')} type="link" style={{ marginBottom: 16, paddingLeft: 0 }}>
-        Back to Craftsmen
-      </Button>
+      {/* Header with back, date filter, and download */}
+      <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
+        <Col>
+          <Space>
+            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/craftsmen')} type="link" style={{ paddingLeft: 0 }}>
+              Back to Craftsmen
+            </Button>
+          </Space>
+        </Col>
+        <Col>
+          <Space wrap>
+            <RangePicker
+              allowClear
+              format="YYYY-MM-DD"
+              value={dateRange}
+              onChange={(dates) => setDateRange(dates)}
+              placeholder={['Start date', 'End date']}
+              style={{ maxWidth: 300 }}
+            />
+            <Button
+              type="primary"
+              icon={<DownloadOutlined />}
+              onClick={handleDownloadStatement}
+            >
+              Download Statement PDF
+            </Button>
+          </Space>
+        </Col>
+      </Row>
 
+      {/* Craftsman info card */}
       {craftsman && (
         <Card style={{ marginBottom: 24 }}>
-          <Descriptions title={<Title level={4} style={{ marginBottom: 0 }}>{craftsman.name}</Title>} bordered column={{ xs: 1, sm: 2, md: 3 }}>
+          <Descriptions
+            title={<Title level={4} style={{ marginBottom: 0 }}>{craftsman.name}</Title>}
+            bordered
+            column={{ xs: 1, sm: 2, md: 3 }}
+          >
             <Descriptions.Item label="Code">{craftsman.code || '-'}</Descriptions.Item>
             <Descriptions.Item label="Phone">{craftsman.contact?.phone || '-'}</Descriptions.Item>
             <Descriptions.Item label="Email">{craftsman.contact?.email || '-'}</Descriptions.Item>
@@ -481,7 +607,7 @@ export default function CraftsmanDetail() {
         </Card>
       )}
 
-      {/* Gold Summary Cards – 2 per row on phone, 4 on larger */}
+      {/* Gold Summary Cards */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={12} sm={12} md={6}>
           <Card>
@@ -510,7 +636,7 @@ export default function CraftsmanDetail() {
         </Col>
       </Row>
 
-      {/* Labour / Cash Summary Cards – 1 per row on phone, 3 on tablet+ */}
+      {/* Labour / Cash Summary Cards */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} sm={8}>
           <Card>
@@ -533,7 +659,7 @@ export default function CraftsmanDetail() {
         </Col>
       </Row>
 
-      {/* Tabs with tables */}
+      {/* Tabs with filtered data */}
       <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
 
       {/* Add/Edit Modal */}
