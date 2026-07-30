@@ -4,3 +4,8 @@
 body {
   font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
+
+.notification-unread-row {
+  background-color: #e6f7ff;   /* light blue */
+  font-weight: 500;
+}

@@ -5,12 +5,12 @@ import { supabase } from '../lib/supabase'
 import { getAssetUrl } from '../utilities/storage'
 import {
   Layout, Menu, Button, Avatar, Dropdown, Space, Typography, Badge,
-  theme, Drawer, Grid
+  theme, Drawer, Grid, Popover, List, Skeleton, Tag
 } from 'antd'
 import {
   CrownOutlined, ShoppingCartOutlined, AppstoreOutlined,
   OrderedListOutlined, TeamOutlined, ToolOutlined, LogoutOutlined,
-  BellOutlined, SettingOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
+  BellOutlined, SettingOutlined, MenuFoldOutlined, MenuUnfoldOutlined, MailOutlined,
   UserOutlined, DollarOutlined, MenuOutlined,PictureOutlined,SwapOutlined,StarOutlined
 } from '@ant-design/icons'
 import InstallBanner from '../components/InstallBanner'
@@ -35,6 +35,10 @@ export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [profile, setProfile] = useState(null)
+  const [unreadCount, setUnreadCount] = useState(0)
+  const [popoverVisible, setPopoverVisible] = useState(false)
+  const [recentNotifications, setRecentNotifications] = useState([])
+  const [loadingNotifications, setLoadingNotifications] = useState(false)
   const screens = useBreakpoint()
   const isMobile = !screens.md
 
@@ -42,7 +46,16 @@ export default function AppLayout() {
     token: { colorBgContainer, borderRadiusLG },
   } = theme.useToken()
 
-  // ✅ Fetch profile function (reusable)
+  // Type color mapping for notification tags
+  const typeColorMap = {
+    info: 'blue',
+    warning: 'orange',
+    alert: 'red',
+    success: 'green',
+    reminder: 'purple',
+  }
+
+  // Fetch profile
   const fetchProfile = useCallback(async () => {
     if (!user) return
     const { data } = await supabase
@@ -53,17 +66,58 @@ export default function AppLayout() {
     if (data) setProfile(data)
   }, [user])
 
-  // Initial fetch
   useEffect(() => {
     fetchProfile()
   }, [fetchProfile])
 
-  // ✅ Listen for profile updates from Profile page
   useEffect(() => {
     const handler = () => fetchProfile()
     window.addEventListener('profile-updated', handler)
     return () => window.removeEventListener('profile-updated', handler)
   }, [fetchProfile])
+
+  // Real-time unread count
+  useEffect(() => {
+    if (!user) return
+
+    const fetchUnreadCount = async () => {
+      const { count } = await supabase
+        .from('notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .eq('is_read', false)
+      setUnreadCount(count || 0)
+    }
+
+    fetchUnreadCount()
+
+    const channel = supabase
+      .channel('notifications-channel')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
+        () => fetchUnreadCount()
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [user])
+
+  // Fetch recent 5 notifications for popover
+  const fetchRecentNotifications = useCallback(async () => {
+    if (!user) return
+    setLoadingNotifications(true)
+    const { data } = await supabase
+      .from('notifications')
+      .select('id, title, message, type, is_read, created_at')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(5)
+    setRecentNotifications(data || [])
+    setLoadingNotifications(false)
+  }, [user])
 
   const handleLogout = async () => {
     await signOut()
@@ -93,13 +147,13 @@ export default function AppLayout() {
     { key: '/customers', icon: <TeamOutlined />, label: 'Customers' },
     { key: '/craftsmen', icon: <ToolOutlined />, label: 'Craftsmen' },
     { key: '/hero-slides', icon: <PictureOutlined />, label: 'Hero Slides' },
+    { key: '/inbox', icon: <MailOutlined />, label: 'Inbox' },
     { key: '/reviews', icon: <StarOutlined />, label: 'Reviews' },
     { key: '/settings', icon: <SettingOutlined />, label: 'Settings' },
     { key: '/users', icon: <TeamOutlined />, label: 'Users' },
     { key: '/profile', icon: <UserOutlined />, label: 'Profile' },
   ]
 
-  // ✅ Resolve avatar URL
   const avatarSrc = profile?.avatar_url ? getAssetUrl(profile.avatar_url) : null
 
   const sidebarContent = (
@@ -274,9 +328,62 @@ export default function AppLayout() {
           </Space>
 
           <Space size={isMobile ? 12 : 20}>
-            <Badge count={5} size="small">
-              <BellOutlined style={{ fontSize: 18, cursor: 'pointer' }} />
-            </Badge>
+            {/* Notification bell with popover */}
+            <Popover
+              trigger="click"
+              open={popoverVisible}
+              onOpenChange={(visible) => {
+                setPopoverVisible(visible)
+                if (visible) fetchRecentNotifications()
+              }}
+              title={
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>Notifications</span>
+                  {unreadCount > 0 && <Tag color="blue">{unreadCount} new</Tag>}
+                </div>
+              }
+              content={
+                <div style={{ width: 300 }}>
+                  {loadingNotifications ? (
+                    <Skeleton active paragraph={{ rows: 3 }} />
+                  ) : recentNotifications.length === 0 ? (
+                    <Text type="secondary">No recent notifications</Text>
+                  ) : (
+                    <>
+                      <List
+                        dataSource={recentNotifications}
+                        renderItem={(item) => (
+                          <List.Item style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
+                            <List.Item.Meta
+                              avatar={<Tag color={typeColorMap[item.type] || 'default'}>{item.type}</Tag>}
+                              title={<Text strong={!item.is_read}>{item.title}</Text>}
+                              description={item.message}
+                            />
+                          </List.Item>
+                        )}
+                      />
+                      <Button
+                        type="primary"
+                        block
+                        style={{ marginTop: 12 }}
+                        onClick={() => {
+                          setPopoverVisible(false)
+                          navigate('/notifications')
+                        }}
+                      >
+                        View All Notifications
+                      </Button>
+                    </>
+                  )}
+                </div>
+              }
+            >
+              <Badge count={unreadCount} size="small" offset={[-2, 2]}>
+                <BellOutlined style={{ fontSize: 18, cursor: 'pointer' }} />
+              </Badge>
+            </Popover>
+
+            {/* User avatar & dropdown */}
             <Dropdown
               menu={{ items: userMenuItems, onClick: handleUserMenuClick }}
               trigger={['click']}

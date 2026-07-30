@@ -22,6 +22,8 @@ import HeroSlides from './pages/HeroSlides'
 import PaymentEvaluation from './pages/PaymentEvaluation'
 import Returns from './pages/Returns'
 import Reviews from './pages/Reviews'
+import NotificationsPage from './pages/NotificationsPage'
+import InboxPage from './pages/InboxPage'
 
 // --- Luxurious Jewellery Theme Tokens ---
 const themeTokens = {
@@ -68,6 +70,8 @@ export default function App() {
             <Route path="payment-evaluation" element={<PaymentEvaluation />} />
             <Route path="returns" element={<Returns />} />
             <Route path="reviews" element={<Reviews />} />
+            <Route path="/notifications" element={<NotificationsPage />} />
+            <Route path="/inbox" element={<InboxPage />} />
           </Route>
         </Routes>
       </AuthProvider>

@@ -1,0 +1,2 @@
+[functions.receive-email]
+require_auth = false

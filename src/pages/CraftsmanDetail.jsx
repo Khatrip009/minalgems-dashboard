@@ -48,7 +48,7 @@ export default function CraftsmanDetail() {
   const [loading, setLoading] = useState(false)
 
   // --- Date range filters ---
-  const [dateRange, setDateRange] = useState(null) // [dayjs, dayjs] or null
+  const [dateRange, setDateRange] = useState(null)
 
   // --- Raw (unfiltered) data from database ---
   const [allIssues, setAllIssues] = useState([])
@@ -68,19 +68,19 @@ export default function CraftsmanDetail() {
   const [editingRecord, setEditingRecord] = useState(null)
   const [form] = Form.useForm()
 
-  const [organization, setOrganization] = useState(null);
+  const [organization, setOrganization] = useState(null)
 
-useEffect(() => {
-  const fetchOrg = async () => {
-    const { data } = await supabase
-      .from('organizations')
-      .select('*')
-      .limit(1)
-      .single();
-    setOrganization(data);
-  };
-  fetchOrg();
-}, []);
+  useEffect(() => {
+    const fetchOrg = async () => {
+      const { data } = await supabase
+        .from('organizations')
+        .select('*')
+        .limit(1)
+        .single()
+      setOrganization(data)
+    }
+    fetchOrg()
+  }, [])
 
   // Fetch craftsman details
   const fetchCraftsman = async () => {
@@ -88,34 +88,34 @@ useEffect(() => {
     setCraftsman(data)
   }
 
-  // Fetch all raw data
+  // Fetch all raw data (includes sr_no, ordered by sr_no descending)
   const fetchData = async () => {
     setLoading(true)
 
     const [iss, ret, cons, pay] = await Promise.all([
       supabase
         .from('craftsman_gold_issues')
-        .select('id, craftsman_id, issue_date, quantity_24kt, remark, reference_no, created_at, updated_at')
+        .select('id, craftsman_id, issue_date, quantity_24kt, remark, reference_no, created_at, updated_at, sr_no')
         .eq('craftsman_id', id)
-        .order('issue_date', { ascending: false }),
+        .order('sr_no', { ascending: false }),
 
       supabase
         .from('craftsman_gold_returns')
-        .select('id, craftsman_id, return_date, quantity_24kt, remark, reference_no, created_at, updated_at')
+        .select('id, craftsman_id, return_date, quantity_24kt, remark, reference_no, created_at, updated_at, sr_no')
         .eq('craftsman_id', id)
-        .order('return_date', { ascending: false }),
+        .order('sr_no', { ascending: false }),
 
       supabase
         .from('craftsman_gold_consumptions')
-        .select('id, craftsman_id, consumption_date, gold_weight, labour_amount, remark, reference_no, item_no, carat, conversion_percentage, final_gold_24kt, created_at, updated_at')
+        .select('id, craftsman_id, consumption_date, gold_weight, labour_amount, remark, reference_no, item_no, carat, conversion_percentage, final_gold_24kt, created_at, updated_at, sr_no')
         .eq('craftsman_id', id)
-        .order('consumption_date', { ascending: false }),
+        .order('sr_no', { ascending: false }),
 
       supabase
         .from('craftsman_cash_payments')
-        .select('id, craftsman_id, payment_date, amount, remark, reference_no, created_at, updated_at')
+        .select('id, craftsman_id, payment_date, amount, remark, reference_no, created_at, updated_at, sr_no')
         .eq('craftsman_id', id)
-        .order('payment_date', { ascending: false }),
+        .order('sr_no', { ascending: false }),
     ])
 
     const rawIssues = iss.data || []
@@ -136,7 +136,7 @@ useEffect(() => {
     fetchData()
   }, [id])
 
-  // Apply date filtering whenever raw data or date range changes
+  // Apply date filtering
   useEffect(() => {
     if (!dateRange || dateRange.length !== 2) {
       setIssues(allIssues)
@@ -170,24 +170,23 @@ useEffect(() => {
     setPayments(filterByDate(allPayments, 'payment_date'))
   }, [allIssues, allReturns, allConsumptions, allPayments, dateRange])
 
-  
   // --- PDF export ---
-const handleDownloadStatement = () => {
-  const startStr = dateRange?.[0]?.format('YYYY-MM-DD') || '';
-  const endStr = dateRange?.[1]?.format('YYYY-MM-DD') || '';
-  generateStatementPdf(
-    craftsman,
-    issues,
-    returns,
-    consumptions,
-    payments,
-    startStr,
-    endStr,
-    organization   // <-- pass it here
-  );
-};
+  const handleDownloadStatement = () => {
+    const startStr = dateRange?.[0]?.format('YYYY-MM-DD') || ''
+    const endStr = dateRange?.[1]?.format('YYYY-MM-DD') || ''
+    generateStatementPdf(
+      craftsman,
+      issues,
+      returns,
+      consumptions,
+      payments,
+      startStr,
+      endStr,
+      organization
+    )
+  }
 
-  // --- Modal handlers (unchanged) ---
+  // --- Modal handlers ---
   const openAddModal = (type) => {
     setModalType(type)
     setEditingRecord(null)
@@ -204,6 +203,7 @@ const handleDownloadStatement = () => {
       return_date: record.return_date ? dayjs(record.return_date) : null,
       consumption_date: record.consumption_date ? dayjs(record.consumption_date) : null,
       payment_date: record.payment_date ? dayjs(record.payment_date) : null,
+      sr_no: record.sr_no,
     })
     setModalOpen(true)
   }
@@ -219,92 +219,96 @@ const handleDownloadStatement = () => {
     if (error) message.error('Delete failed')
     else {
       message.success('Deleted')
-      fetchData() // refresh raw data
+      fetchData()
     }
   }
 
   const handleSubmit = async () => {
-    const values = await form.validateFields();
+    const values = await form.validateFields()
     const tableMap = {
       issue: 'craftsman_gold_issues',
       return: 'craftsman_gold_returns',
       consumption: 'craftsman_gold_consumptions',
       payment: 'craftsman_cash_payments',
-    };
+    }
 
-    let payload = { craftsman_id: id };
+    // Build payload without craftsman_id initially
+    let payload = {}
+
+    // --- sr_no handling ---
+    if (values.sr_no !== undefined && values.sr_no !== null) {
+      payload.sr_no = values.sr_no
+    }
 
     switch (modalType) {
       case 'issue':
-        payload.issue_date = values.issue_date?.format('YYYY-MM-DD');
-        payload.quantity_24kt = values.quantity_24kt;
-        if (values.remark) payload.remark = values.remark;
-        if (values.reference_no) payload.reference_no = values.reference_no;
-        break;
+        payload.issue_date = values.issue_date?.format('YYYY-MM-DD')
+        payload.quantity_24kt = values.quantity_24kt
+        if (values.remark) payload.remark = values.remark
+        if (values.reference_no) payload.reference_no = values.reference_no
+        break
 
       case 'return':
-        payload.return_date = values.return_date?.format('YYYY-MM-DD');
-        payload.quantity_24kt = values.quantity_24kt;
-        if (values.remark) payload.remark = values.remark;
-        if (values.reference_no) payload.reference_no = values.reference_no;
-        break;
+        payload.return_date = values.return_date?.format('YYYY-MM-DD')
+        payload.quantity_24kt = values.quantity_24kt
+        if (values.remark) payload.remark = values.remark
+        if (values.reference_no) payload.reference_no = values.reference_no
+        break
 
       case 'consumption':
-        payload.consumption_date = values.consumption_date?.format('YYYY-MM-DD');
-        payload.gold_weight = values.gold_weight;
-        payload.carat = values.carat;
-        payload.conversion_percentage = values.conversion_percentage;
+        payload.consumption_date = values.consumption_date?.format('YYYY-MM-DD')
+        payload.gold_weight = values.gold_weight
+        payload.carat = values.carat
+        payload.conversion_percentage = values.conversion_percentage
 
-        // ✅ Handle final_gold_24kt:
-        // - If user filled a value → send it (manual override)
-        // - If user cleared the field (null) → send null so trigger recalculates
-        // - If creating and not touched → omit field (trigger will compute)
-        if (values.final_gold_24kt !== undefined) {
-          payload.final_gold_24kt = values.final_gold_24kt;   // can be a number or null
-        } else if (editingRecord) {
-          // Editing existing record, field was cleared → force recalculation
-          payload.final_gold_24kt = null;
+        // Only include final_gold_24kt if user gave a non‑null value
+        if (values.final_gold_24kt != null) {
+          payload.final_gold_24kt = values.final_gold_24kt
         }
-        // else: creating new and no override – omit field, trigger handles it
 
-        payload.labour_amount = values.labour_amount || 0;
-        if (values.item_no) payload.item_no = values.item_no;
-        if (values.remark) payload.remark = values.remark;
-        if (values.reference_no) payload.reference_no = values.reference_no;
-        break;
+        payload.labour_amount = values.labour_amount || 0
+        if (values.item_no) payload.item_no = values.item_no
+        if (values.remark) payload.remark = values.remark
+        if (values.reference_no) payload.reference_no = values.reference_no
+        break
 
       case 'payment':
-        payload.payment_date = values.payment_date?.format('YYYY-MM-DD');
-        payload.amount = values.amount;
-        if (values.remark) payload.remark = values.remark;
-        if (values.reference_no) payload.reference_no = values.reference_no;
-        break;
+        payload.payment_date = values.payment_date?.format('YYYY-MM-DD')
+        payload.amount = values.amount
+        if (values.remark) payload.remark = values.remark
+        if (values.reference_no) payload.reference_no = values.reference_no
+        break
 
       default:
-        return;
+        return
+    }
+
+    // Only include craftsman_id when inserting (not when updating)
+    if (!editingRecord) {
+      payload.craftsman_id = id
     }
 
     if (editingRecord) {
-      const { error } = await supabase.from(tableMap[modalType]).update(payload).eq('id', editingRecord.id);
-      if (error) return message.error('Update failed');
-      message.success('Updated');
+      const { error } = await supabase.from(tableMap[modalType]).update(payload).eq('id', editingRecord.id)
+      if (error) return message.error('Update failed')
+      message.success('Updated')
     } else {
-      const { error } = await supabase.from(tableMap[modalType]).insert([payload]);
-      if (error) return message.error('Insert failed');
-      message.success('Added');
+      const { error } = await supabase.from(tableMap[modalType]).insert([payload])
+      if (error) return message.error('Insert failed')
+      message.success('Added')
     }
-    setModalOpen(false);
-    fetchData(); // refresh raw data
-  };
-  
-  // --- Balance calculations (using filtered data) ---
+    setModalOpen(false)
+    fetchData()
+  }
+
+  // --- Balance calculations ---
   const totalIssued = issues.reduce((s, i) => s + Number(i.quantity_24kt), 0)
   const totalReturned = returns.reduce((s, r) => s + Number(r.quantity_24kt), 0)
   const totalConsumed = consumptions.reduce((s, c) => s + Number(c.final_gold_24kt), 0)
   const totalLabour = consumptions.reduce((s, c) => s + Number(c.labour_amount), 0)
   const totalPaid = payments.reduce((s, p) => s + Number(p.amount), 0)
 
-  // --- Table columns (unchanged except now use filtered data) ---
+  // --- Table columns ---
   const dateColumn = (dataIndex) => ({
     title: 'Date',
     dataIndex,
@@ -314,6 +318,15 @@ const handleDownloadStatement = () => {
 
   const remarkColumn = { title: 'Remark', dataIndex: 'remark', key: 'remark', responsive: ['md'] }
   const referenceColumn = { title: 'Ref No', dataIndex: 'reference_no', key: 'reference_no', responsive: ['lg'] }
+
+  const srNoColumn = {
+    title: 'SR No',
+    dataIndex: 'sr_no',
+    key: 'sr_no',
+    width: 80,
+    sorter: (a, b) => a.sr_no - b.sr_no,
+    defaultSortOrder: 'descend',
+  }
 
   const actionColumn = (type) => ({
     title: 'Actions',
@@ -354,7 +367,9 @@ const handleDownloadStatement = () => {
     },
   })
 
+  // Columns – SR No appears first
   const issueColumns = [
+    srNoColumn,
     dateColumn('issue_date'),
     { title: 'Qty (24kt)', dataIndex: 'quantity_24kt', key: 'quantity_24kt', render: (v) => `${v} g` },
     remarkColumn,
@@ -363,6 +378,7 @@ const handleDownloadStatement = () => {
   ]
 
   const returnColumns = [
+    srNoColumn,
     dateColumn('return_date'),
     { title: 'Qty (24kt)', dataIndex: 'quantity_24kt', key: 'quantity_24kt', render: (v) => `${v} g` },
     remarkColumn,
@@ -371,6 +387,7 @@ const handleDownloadStatement = () => {
   ]
 
   const consumptionColumns = [
+    srNoColumn,
     dateColumn('consumption_date'),
     { title: 'Gold Wt', dataIndex: 'gold_weight', key: 'gold_weight', render: (v) => `${v} g`, responsive: ['sm'] },
     { title: 'Carat', dataIndex: 'carat', key: 'carat', responsive: ['md'] },
@@ -384,6 +401,7 @@ const handleDownloadStatement = () => {
   ]
 
   const paymentColumns = [
+    srNoColumn,
     dateColumn('payment_date'),
     { title: 'Amount', dataIndex: 'amount', key: 'amount', render: (v) => `₹${v?.toLocaleString()}` },
     remarkColumn,
@@ -407,6 +425,12 @@ const handleDownloadStatement = () => {
       <Form.Item name={name} label={label}><Input /></Form.Item>
     )
 
+    const srNoInput = (
+      <Form.Item name="sr_no" label="SR No">
+        <InputNumber min={1} step={1} style={{ width: '100%' }} placeholder="Auto if empty" />
+      </Form.Item>
+    )
+
     switch (modalType) {
       case 'issue':
         return (
@@ -415,6 +439,7 @@ const handleDownloadStatement = () => {
             {commonQty('quantity_24kt', 'Quantity (24kt)')}
             {commonText('remark', 'Remark')}
             {commonText('reference_no', 'Reference No')}
+            {srNoInput}
           </>
         )
       case 'return':
@@ -424,6 +449,7 @@ const handleDownloadStatement = () => {
             {commonQty('quantity_24kt', 'Quantity (24kt)')}
             {commonText('remark', 'Remark')}
             {commonText('reference_no', 'Reference No')}
+            {srNoInput}
           </>
         )
       case 'consumption':
@@ -458,6 +484,7 @@ const handleDownloadStatement = () => {
             {commonText('item_no', 'Item No')}
             {commonText('remark', 'Remark')}
             {commonText('reference_no', 'Reference No')}
+            {srNoInput}
           </>
         )
       case 'payment':
@@ -469,6 +496,7 @@ const handleDownloadStatement = () => {
             </Form.Item>
             {commonText('remark', 'Remark')}
             {commonText('reference_no', 'Reference No')}
+            {srNoInput}
           </>
         )
       default:
@@ -562,7 +590,7 @@ const handleDownloadStatement = () => {
 
   return (
     <div>
-      {/* Header with back, date filter, and download */}
+      {/* Header */}
       <Row justify="space-between" align="middle" style={{ marginBottom: 16 }}>
         <Col>
           <Space>
@@ -592,7 +620,7 @@ const handleDownloadStatement = () => {
         </Col>
       </Row>
 
-      {/* Craftsman info card */}
+      {/* Craftsman info */}
       {craftsman && (
         <Card style={{ marginBottom: 24 }}>
           <Descriptions
@@ -659,7 +687,7 @@ const handleDownloadStatement = () => {
         </Col>
       </Row>
 
-      {/* Tabs with filtered data */}
+      {/* Tabs */}
       <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
 
       {/* Add/Edit Modal */}
