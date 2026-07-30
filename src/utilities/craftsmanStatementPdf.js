@@ -2,7 +2,7 @@
 import pdfMake from 'pdfmake/build/pdfmake';
 import pdfFonts from 'pdfmake/build/vfs_fonts';
 
-pdfMake.vfs = pdfFonts;   // works for pdfmake 0.3.x
+pdfMake.vfs = pdfFonts;
 
 function formatDMY(dateStr) {
   if (!dateStr) return '';
@@ -19,7 +19,7 @@ function formatDMY(dateStr) {
  * @param {Array} payments
  * @param {string} startDate
  * @param {string} endDate
- * @param {object} organization  – { name, legal_name, business_address, gstin, pan, phone, email, logo_url? }
+ * @param {object} organization
  */
 export function generateStatementPdf(
   craftsman,
@@ -34,8 +34,9 @@ export function generateStatementPdf(
   const org = organization;
   const craftsmanName = craftsman?.name || 'Craftsman';
 
-  // ── Entries (same as before) ──
+  // ── Entries ──
   const leftEntries = consumptions.map((c) => ({
+    sr_no: c.sr_no,
     date: c.consumption_date,
     item_no: c.item_no || '',
     carat: Number(c.carat || 18),
@@ -64,9 +65,9 @@ export function generateStatementPdf(
     quantity_24kt: null,
   }));
 
-  const rightEntries = [...issueEntries, ...returnEntries, ...paymentEntries].sort(
-    (a, b) => new Date(a.date) - new Date(b.date)
-  );
+  const rightEntries = [...issueEntries, ...returnEntries, ...paymentEntries]
+    .sort((a, b) => new Date(a.date) - new Date(b.date))
+    .map((entry, index) => ({ ...entry, row_no: index + 1 }));
 
   // ── Totals ──
   let totalGoldWeight = 0, totalLabour = 0, totalEquivalent24kt = 0;
@@ -99,9 +100,10 @@ export function generateStatementPdf(
     `${netGold.toFixed(3)} LAVANU`
   );
 
-  // ── Build Tables ──
+  // ── Build Left Table (Consumptions) ──
   const leftTableBody = [
     [
+      { text: 'SR No', style: 'tableHeader', alignment: 'center' },
       { text: 'Date', style: 'tableHeader' },
       { text: 'Item No', style: 'tableHeader' },
       { text: 'Carat', style: 'tableHeader', alignment: 'center' },
@@ -113,6 +115,7 @@ export function generateStatementPdf(
   ];
   leftEntries.forEach((e) => {
     leftTableBody.push([
+      { text: e.sr_no, alignment: 'center' },
       formatDMY(e.date),
       e.item_no,
       { text: e.carat, alignment: 'center' },
@@ -122,9 +125,10 @@ export function generateStatementPdf(
       { text: e.labour_amount.toFixed(2), alignment: 'right' },
     ]);
   });
-  // totals row
+  // Totals row – 8 columns: colSpan 5 for the first five, then totals for last three
   leftTableBody.push([
-    { text: '', colSpan: 4, border: [false, false, false, false] },  // no extra bottom border
+    { text: '', colSpan: 5, border: [false, false, false, false] },
+    {},
     {},
     {},
     {},
@@ -133,8 +137,10 @@ export function generateStatementPdf(
     { text: totalLabour.toFixed(2), alignment: 'right', bold: true, fillColor: '#f2f2f2' },
   ]);
 
+  // ── Build Right Table (Issues / Returns / Payments) ──
   const rightTableBody = [
     [
+      { text: 'SR No', style: 'tableHeader', alignment: 'center' },
       { text: 'Date', style: 'tableHeader' },
       { text: 'Remark', style: 'tableHeader' },
       { text: 'Cash', style: 'tableHeader', alignment: 'right' },
@@ -143,6 +149,7 @@ export function generateStatementPdf(
   ];
   rightEntries.forEach((e) => {
     rightTableBody.push([
+      { text: e.row_no, alignment: 'center' },
       formatDMY(e.date),
       e.remark,
       { text: e.cash_amount ? e.cash_amount.toFixed(2) : '', alignment: 'right' },
@@ -150,8 +157,10 @@ export function generateStatementPdf(
     ]);
   });
   const net24kt = total24ktIssued - total24ktReturned;
+  // Totals row – 5 columns: colSpan 3 for first three, then totals for Cash and 24Kt
   rightTableBody.push([
-    { text: '', colSpan: 2, border: [false, false, false, false] },
+    { text: '', colSpan: 3, border: [false, false, false, false] },
+    {},
     {},
     { text: totalCash.toFixed(2), alignment: 'right', bold: true, fillColor: '#f2f2f2' },
     { text: net24kt.toFixed(3), alignment: 'right', bold: true, fillColor: '#f2f2f2' },
@@ -175,10 +184,9 @@ export function generateStatementPdf(
 
   const headerBlock = headerLines.map((line) => ({ text: line, fontSize: 8, color: '#333' }));
 
-  // ── Document Definition ──
   const docDefinition = {
     pageOrientation: 'landscape',
-    pageMargins: [30, 30, 30, 40],  // extra bottom for footer
+    pageMargins: [30, 30, 30, 40],
     header: {
       margin: [30, 10, 30, 0],
       columns: [
@@ -207,7 +215,6 @@ export function generateStatementPdf(
       };
     },
     content: [
-      // Title & period
       { text: `Craftsman Statement: ${craftsmanName}`, style: 'title' },
       {
         text: `Period: ${startDate ? formatDMY(startDate) : 'from start'} to ${
@@ -216,14 +223,13 @@ export function generateStatementPdf(
         style: 'subtitle',
         margin: [0, 0, 0, 20],
       },
-      // Two-column tables
       {
         columns: [
           {
             width: '60%',
-            layout: 'grid',                     // ← full borders
+            layout: 'grid',
             table: {
-              widths: ['*', '*', 'auto', 'auto', 'auto', 'auto', 'auto'],
+              widths: ['auto', '*', '*', 'auto', 'auto', 'auto', 'auto', 'auto'],
               body: leftTableBody,
             },
           },
@@ -231,13 +237,12 @@ export function generateStatementPdf(
             width: '40%',
             layout: 'grid',
             table: {
-              widths: ['*', '*', 'auto', 'auto'],
+              widths: ['auto', '*', '*', 'auto', 'auto'],
               body: rightTableBody,
             },
           },
         ],
       },
-      // Summary
       { text: 'Summary', style: 'subheader', margin: [0, 20, 0, 10] },
       {
         columns: [
@@ -257,7 +262,7 @@ export function generateStatementPdf(
     defaultStyle: {
       fontSize: 8,
       lineHeight: 1.3,
-      color: '#000',          // all black text
+      color: '#000',
     },
   };
 

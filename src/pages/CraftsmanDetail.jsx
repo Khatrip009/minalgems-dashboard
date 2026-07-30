@@ -597,6 +597,8 @@ export default function CraftsmanDetail() {
             <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/craftsmen')} type="link" style={{ paddingLeft: 0 }}>
               Back to Craftsmen
             </Button>
+            
+            <Button onClick={() => navigate(`/craftsmen/${id}/statement`)}>View Statement</Button>
           </Space>
         </Col>
         <Col>

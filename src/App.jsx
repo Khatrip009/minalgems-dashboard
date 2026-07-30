@@ -24,6 +24,7 @@ import Returns from './pages/Returns'
 import Reviews from './pages/Reviews'
 import NotificationsPage from './pages/NotificationsPage'
 import InboxPage from './pages/InboxPage'
+import CraftsmanStatement from './pages/CraftsmanStatement'
 
 // --- Luxurious Jewellery Theme Tokens ---
 const themeTokens = {
@@ -62,6 +63,7 @@ export default function App() {
             <Route path="customers/:id" element={<CustomerDetail />} />
             <Route path="craftsmen" element={<Craftsmen />} />
             <Route path="craftsmen/:id" element={<CraftsmanDetail />} />
+            <Route path="/craftsmen/:id/statement" element={<CraftsmanStatement />} />
             <Route path="payments" element={<Payments />} />
             <Route path="settings" element={<Settings />} />
             <Route path="users" element={<Users />} />

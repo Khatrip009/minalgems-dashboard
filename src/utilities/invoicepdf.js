@@ -74,17 +74,26 @@ function numberToIndianWords(amount) {
 }
 
 /**
- * Build product description – show each diamond individually.
+ * Build product description.
+ * - If price_mode is "manual", show only item name and final price.
+ * - Otherwise (auto), show full breakdown from product_snapshot or fallback to product_details.
  */
 function buildProductDescription(item) {
-  const product = item.product_details || {}
-  const breakdownFromMeta = item.metadata?.breakdown || item.breakdown || {}
+  const metadata = item.metadata || {}
+  const priceMode = metadata.price_mode || item.price_mode || 'auto'
+  const breakdown = metadata.breakdown || item.breakdown || {}
+  const product = metadata.product_snapshot || item.product_details || {}
+
   const title = item.product_title || item.title || product.title || 'Product'
-  const itemNo = product.item_no || item.product_sku || product.sku || ''
+  const itemNo = product.item_no || product.sku || item.product_sku || ''
+
+  // If manual price mode → no detailed breakdown
+  if (priceMode === 'manual') {
+    if (itemNo) return `Item No: ${itemNo}  |  ${title}`
+    return title
+  }
 
   const lines = []
-
-  // Item No & Name
   if (itemNo) {
     lines.push(`Item No: ${itemNo}  |  ${title}`)
   } else {
@@ -108,25 +117,23 @@ function buildProductDescription(item) {
       lines.push(`${i + 1}. ${details}  ${carat} ct  x  ${rate}/ct  =  ${total}`)
     })
 
-    // Total diamonds line
     const totalCarat = diamonds.reduce((s, d) => s + Number(d.carat), 0)
     const totalPrice = diamonds.reduce((s, d) => s + Number(d.total_price), 0)
     const avgRate = totalCarat > 0 ? totalPrice / totalCarat : 0
     lines.push(`Total Diamonds: ${totalCarat.toFixed(3)} ct, Avg Rate: ${formatCurrency(avgRate)}/ct, Total: ${formatCurrency(totalPrice)}`)
-  } else if (breakdownFromMeta.diamond_total > 0 || breakdownFromMeta.diamond_weight > 0) {
-    // Fallback from metadata
-    const dWeight = breakdownFromMeta.diamond_weight || 0
-    const dTotal = breakdownFromMeta.diamond_total || 0
-    const dRate = dWeight > 0 ? dTotal / dWeight : breakdownFromMeta.diamond_rate || 0
+  } else if (breakdown.diamond_total > 0 || breakdown.diamond_weight > 0) {
+    const dWeight = breakdown.diamond_weight || 0
+    const dTotal = breakdown.diamond_total || 0
+    const dRate = dWeight > 0 ? dTotal / dWeight : breakdown.diamond_rate || 0
     lines.push(`Diamonds: ${Number(dWeight).toFixed(3)} ct x ${formatCurrency(dRate)}/ct = ${formatCurrency(dTotal)}`)
   }
 
   // ---- Metal ----
   const metalType = product.metal_type || 'Gold'
   const goldCarat = product.gold_carat || ''
-  let metalWeight = product.gold_weight || breakdownFromMeta.metal_weight || 0
-  let metalRate = product.metal_rate || breakdownFromMeta.metal_rate || 0
-  let metalTotal = product.total_metal_price || breakdownFromMeta.metal_total || 0
+  let metalWeight = product.gold_weight || breakdown.metal_weight || 0
+  let metalRate = product.metal_rate || breakdown.metal_rate || 0
+  let metalTotal = product.total_metal_price || breakdown.metal_total || 0
   if (!metalTotal && metalWeight > 0 && metalRate > 0) {
     metalTotal = metalWeight * metalRate
   }
@@ -137,10 +144,13 @@ function buildProductDescription(item) {
   }
 
   // ---- Labour ----
-  const labour = product.labour || breakdownFromMeta.labour || 0
+  const labour = product.labour || breakdown.labour || 0
   if (labour > 0) {
     lines.push(`Labour: ${formatCurrency(labour)}`)
   }
+
+  // ---- Profit (optional, only if we want to show) ----
+  // We'll skip profit in PDF description for now; can be added if needed.
 
   // ---- Total (excl. tax) ----
   lines.push(`Total (excl. tax): ${formatCurrency(item.unit_price)}`)
@@ -280,20 +290,20 @@ export function generateInvoicePDF({ organization, invoice, items, taxLines = []
     margin: { left: margin, right: margin },
     head: [tableColumns.map(col => col.header)],
     body: tableRows.map(row => tableColumns.map(col => row[col.dataKey])),
-    theme: 'grid',                          // ✅ proper grid borders
+    theme: 'grid',
     styles: {
       fontSize: 8,
       cellPadding: 2,
       halign: 'left',
       valign: 'middle',
-      lineColor: [0, 0, 0],                 // black borders
+      lineColor: [0, 0, 0],
       lineWidth: 0.1,
     },
     headStyles: {
       fillColor: primaryColor,
       textColor: 255,
       fontStyle: 'bold',
-      lineColor: primaryColor,              // header border matches header
+      lineColor: primaryColor,
       lineWidth: 0.1,
     },
     alternateRowStyles: {

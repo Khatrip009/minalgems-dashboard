@@ -9,9 +9,9 @@ import {
 } from 'antd'
 import {
   CrownOutlined, ShoppingCartOutlined, AppstoreOutlined,
-  OrderedListOutlined, TeamOutlined, ToolOutlined, LogoutOutlined,
+  TeamOutlined, ToolOutlined, LogoutOutlined,
   BellOutlined, SettingOutlined, MenuFoldOutlined, MenuUnfoldOutlined, MailOutlined,
-  UserOutlined, DollarOutlined, MenuOutlined,PictureOutlined,SwapOutlined,StarOutlined
+  UserOutlined, DollarOutlined, MenuOutlined, PictureOutlined, SwapOutlined, StarOutlined
 } from '@ant-design/icons'
 import InstallBanner from '../components/InstallBanner'
 
@@ -66,6 +66,7 @@ export default function AppLayout() {
     if (data) setProfile(data)
   }, [user])
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
     fetchProfile()
   }, [fetchProfile])
@@ -76,34 +77,46 @@ export default function AppLayout() {
     return () => window.removeEventListener('profile-updated', handler)
   }, [fetchProfile])
 
-  // Real-time unread count
-  useEffect(() => {
-    if (!user) return
+  // Real-time unread count (improved with abort and error handling)
+useEffect(() => {
+  if (!user) return
 
-    const fetchUnreadCount = async () => {
-      const { count } = await supabase
-        .from('notifications')
-        .select('*', { count: 'exact', head: true })
-        .eq('user_id', user.id)
-        .eq('is_read', false)
+  const controller = new AbortController()
+
+  const fetchUnreadCount = async () => {
+    const { count, error } = await supabase
+      .from('notifications')
+      .select('id', { count: 'exact', head: true })   // keep HEAD for efficiency
+      .eq('user_id', user.id)
+      .eq('is_read', false)
+      .abortSignal(controller.signal)
+
+    if (error) {
+      // Ignore abort errors completely – they are expected in StrictMode
+      if (error?.name === 'AbortError' || error?.message?.includes('AbortError')) return
+      console.error('Unread count error:', error)
+      setUnreadCount(0)
+    } else {
       setUnreadCount(count || 0)
     }
+  }
 
-    fetchUnreadCount()
+  fetchUnreadCount()
 
-    const channel = supabase
-      .channel('notifications-channel')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
-        () => fetchUnreadCount()
-      )
-      .subscribe()
+  const channel = supabase
+    .channel('notifications-channel')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
+      () => fetchUnreadCount()
+    )
+    .subscribe()
 
-    return () => {
-      supabase.removeChannel(channel)
-    }
-  }, [user])
+  return () => {
+    controller.abort()
+    supabase.removeChannel(channel)
+  }
+}, [user])
 
   // Fetch recent 5 notifications for popover
   const fetchRecentNotifications = useCallback(async () => {
