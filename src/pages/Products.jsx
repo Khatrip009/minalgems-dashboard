@@ -2,22 +2,232 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Table, Button, Space, Input, Card, Row, Col, Typography, message, Modal, Upload,
-  Descriptions, Tag, Popconfirm, Select, InputNumber, Form, Dropdown,
+  Descriptions, Tag, Popconfirm, Select, InputNumber, Form, Dropdown, Spin, Divider
 } from 'antd'
 import {
   SearchOutlined, ReloadOutlined, PlusOutlined, ExportOutlined, ImportOutlined,
   UploadOutlined, EditOutlined, DeleteOutlined,
   ExpandOutlined, CompressOutlined, ShoppingOutlined,
   PlusCircleOutlined, MinusCircleOutlined, MoreOutlined, FilePdfOutlined,
+  FileImageOutlined, VideoCameraOutlined, CodepenOutlined
 } from '@ant-design/icons'
 import { supabase } from '../lib/supabase'
 import { generateProductRegisterPDF } from '../utilities/productRegisterPdf'
-import { getAssetUrl } from '../utilities/storage'  // ✅ new import
+import { getAssetUrl, uploadFile, generateProductFileName } from '../utilities/storage'
 import dayjs from 'dayjs'
 
 const { Title, Text } = Typography
 const { Option } = Select
 
+// ----------------------------------------------------------------------
+// Manage Images Modal (used inside Products)
+// ----------------------------------------------------------------------
+const ManageImagesModal = ({ product, visible, onClose, onSuccess }) => {
+  const [assets, setAssets] = useState([])
+  const [fileList, setFileList] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [uploading, setUploading] = useState(false)
+
+  const fetchAssets = async () => {
+    if (!product) return
+    setLoading(true)
+    const { data, error } = await supabase
+      .from('product_assets')
+      .select('*')
+      .eq('product_id', product.id)
+      .order('is_primary', { ascending: false })
+      .order('created_at', { ascending: true })
+    if (error) {
+      message.error('Failed to load assets')
+    } else {
+      setAssets(data || [])
+    }
+    setLoading(false)
+  }
+
+  useEffect(() => {
+    if (visible && product) {
+      fetchAssets()
+    }
+  }, [visible, product])
+
+  // Upload new files
+  const handleUpload = async () => {
+    if (fileList.length === 0) {
+      message.warning('Please select at least one file')
+      return
+    }
+    setUploading(true)
+    try {
+      for (const file of fileList) {
+        const originFile = file.originFileObj || file
+        const ext = originFile.name.split('.').pop().toLowerCase()
+        let assetType = 'other'
+        if (originFile.type?.startsWith('image/')) assetType = 'image'
+        else if (originFile.type?.startsWith('video/')) assetType = 'video'
+        else if (['glb', 'gltf'].includes(ext)) assetType = '3d'
+
+        const uniqueName = generateProductFileName(originFile.name, product.item_no || product.sku)
+        const renamedFile = new File([originFile], uniqueName, { type: originFile.type })
+        const relativePath = await uploadFile(renamedFile, 'products')
+
+        await supabase.from('product_assets').insert({
+          product_id: product.id,
+          asset_type: assetType,
+          url: relativePath,
+          filename: originFile.name,
+          file_type: originFile.type,
+          is_primary: false,
+          sort_order: 0,
+        })
+      }
+      message.success('Files uploaded successfully')
+      setFileList([])
+      await fetchAssets()
+      if (onSuccess) onSuccess()
+    } catch (err) {
+      message.error('Upload failed: ' + err.message)
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  // Set primary asset
+  const setPrimary = async (assetId) => {
+    // Unset all primaries for this product
+    await supabase
+      .from('product_assets')
+      .update({ is_primary: false })
+      .eq('product_id', product.id)
+
+    // Set the chosen one
+    const { error } = await supabase
+      .from('product_assets')
+      .update({ is_primary: true })
+      .eq('id', assetId)
+
+    if (error) {
+      message.error('Failed to set primary')
+    } else {
+      message.success('Primary image updated')
+      await fetchAssets()
+      if (onSuccess) onSuccess()
+    }
+  }
+
+  // Delete asset
+  const handleDelete = async (assetId) => {
+    const { error } = await supabase
+      .from('product_assets')
+      .delete()
+      .eq('id', assetId)
+    if (error) {
+      message.error('Delete failed')
+    } else {
+      message.success('Asset removed')
+      await fetchAssets()
+      if (onSuccess) onSuccess()
+    }
+  }
+
+  return (
+    <Modal
+      title={`Manage Images – ${product?.title || ''}`}
+      open={visible}
+      onCancel={onClose}
+      width={800}
+      footer={[
+        <Button key="close" onClick={onClose}>Close</Button>,
+        <Button key="upload" type="primary" loading={uploading} onClick={handleUpload}>
+          Upload Files
+        </Button>,
+      ]}
+      destroyOnClose
+    >
+      <div style={{ marginBottom: 16 }}>
+        <Upload
+          multiple
+          listType="picture-card"
+          fileList={fileList}
+          accept="image/*,video/*,.glb,.gltf"
+          beforeUpload={(file) => {
+            setFileList(prev => [...prev, file])
+            return false
+          }}
+          onRemove={(file) => setFileList(prev => prev.filter(f => f.uid !== file.uid))}
+          itemRender={(originNode, file) => {
+            const ext = file.name?.split('.').pop()?.toLowerCase()
+            let icon = <FileImageOutlined style={{ fontSize: 24, color: '#888' }} />
+            if (file.type?.startsWith('video/')) {
+              icon = <VideoCameraOutlined style={{ fontSize: 24, color: '#888' }} />
+            } else if (['glb', 'gltf'].includes(ext)) {
+              icon = <CodepenOutlined style={{ fontSize: 24, color: '#888' }} />
+            }
+            return (
+              <div style={{ position: 'relative', width: 104, height: 104, borderRadius: 8, overflow: 'hidden', border: '1px solid #d9d9d9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {file.thumbUrl ? (
+                  <img src={file.thumbUrl} alt={file.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : icon}
+                <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'rgba(0,0,0,0.5)', padding: '2px 4px' }}>
+                  <Text style={{ color: '#fff', fontSize: 10 }} ellipsis>{file.name}</Text>
+                </div>
+              </div>
+            )
+          }}
+        >
+          {fileList.length >= 10 ? null : (
+            <div>
+              <PlusOutlined />
+              <div style={{ marginTop: 8 }}>Add</div>
+            </div>
+          )}
+        </Upload>
+      </div>
+
+      <Divider />
+
+      <Spin spinning={loading}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+          {assets.map(asset => {
+            const src = getAssetUrl(asset.url)
+            const isImage = asset.asset_type === 'image'
+            return (
+              <div key={asset.id} style={{ width: 120, border: '1px solid #e8e8e8', borderRadius: 8, padding: 8, background: '#fafafa' }}>
+                <div style={{ height: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                  {isImage ? (
+                    <img src={src} alt={asset.filename} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                  ) : (
+                    <div style={{ textAlign: 'center' }}>
+                      {asset.asset_type === 'video' ? <VideoCameraOutlined style={{ fontSize: 32 }} /> : <CodepenOutlined style={{ fontSize: 32 }} />}
+                      <div style={{ fontSize: 10 }}>{asset.asset_type}</div>
+                    </div>
+                  )}
+                </div>
+                <div style={{ marginTop: 4, fontSize: 10, textAlign: 'center' }} ellipsis>{asset.filename}</div>
+                <Space size="small" style={{ marginTop: 6, justifyContent: 'center', display: 'flex' }}>
+                  {!asset.is_primary && (
+                    <Button size="small" onClick={() => setPrimary(asset.id)}>Set Primary</Button>
+                  )}
+                  {asset.is_primary && <Tag color="gold">Primary</Tag>}
+                  <Popconfirm title="Delete this asset?" onConfirm={() => handleDelete(asset.id)}>
+                    <Button size="small" danger icon={<DeleteOutlined />} />
+                  </Popconfirm>
+                </Space>
+              </div>
+            )
+          })}
+          {assets.length === 0 && !loading && (
+            <div style={{ padding: 20, color: '#999' }}>No assets uploaded yet.</div>
+          )}
+        </div>
+      </Spin>
+    </Modal>
+  )
+}
+
+// ----------------------------------------------------------------------
+// Main Products Component
+// ----------------------------------------------------------------------
 export default function Products() {
   const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(false)
@@ -30,13 +240,17 @@ export default function Products() {
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [editingProduct, setEditingProduct] = useState(null)
   const [form] = Form.useForm()
+  const [editSaving, setEditSaving] = useState(false)
 
   // Import modal
   const [importModalOpen, setImportModalOpen] = useState(false)
 
+  // Image management modal
+  const [imageModalVisible, setImageModalVisible] = useState(false)
+  const [selectedProduct, setSelectedProduct] = useState(null)
+
   const fetchProducts = async () => {
     setLoading(true)
-    // ✅ Updated query to include product assets
     const { data, error } = await supabase
       .from('products')
       .select(`*, categories ( name ), craftsmen ( name ), product_assets ( url, asset_type, is_primary )`)
@@ -79,18 +293,31 @@ export default function Products() {
   // Edit product
   const handleEdit = (record) => {
     setEditingProduct(record)
-    form.setFieldsValue(record)
+    form.setFieldsValue({
+      title: record.title || '',
+      price: record.price ?? 0,
+      available_qty: record.available_qty ?? 0,
+      is_published: record.is_published ?? false,
+    })
     setEditModalOpen(true)
   }
 
   const handleEditSave = async () => {
-    const values = await form.validateFields()
-    const { error } = await supabase.from('products').update(values).eq('id', editingProduct.id)
-    if (error) message.error('Update failed')
-    else {
-      message.success('Product updated')
-      setEditModalOpen(false)
-      fetchProducts()
+    try {
+      const values = await form.validateFields()
+      setEditSaving(true)
+      const { error } = await supabase.from('products').update(values).eq('id', editingProduct.id)
+      if (error) {
+        message.error('Update failed')
+      } else {
+        message.success('Product updated')
+        setEditModalOpen(false)
+        fetchProducts()
+      }
+    } catch (err) {
+      // validation error – handled by antd
+    } finally {
+      setEditSaving(false)
     }
   }
 
@@ -386,7 +613,7 @@ export default function Products() {
     </div>
   )
 
-  // ✅ Updated columns with real image
+  // Columns
   const columns = [
     {
       title: 'Image',
@@ -395,7 +622,6 @@ export default function Products() {
       responsive: ['sm'],
       render: (_, record) => {
         const assets = record.product_assets || []
-        // find the first primary image, or fallback to first image
         const primaryAsset = assets.find(a => a.is_primary && a.asset_type === 'image') || assets.find(a => a.asset_type === 'image') || assets[0]
         const src = primaryAsset ? getAssetUrl(primaryAsset.url) : null
         return (
@@ -463,6 +689,15 @@ export default function Products() {
               onClick: () => handleEdit(record),
             },
             {
+              key: 'images',
+              icon: <FileImageOutlined />,
+              label: 'Manage Images',
+              onClick: () => {
+                setSelectedProduct(record)
+                setImageModalVisible(true)
+              },
+            },
+            {
               key: 'delete',
               icon: <DeleteOutlined />,
               label: 'Delete',
@@ -482,6 +717,12 @@ export default function Products() {
             <Space className="desktop-actions" style={{ display: 'none' }}>
               <Button type="link" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
                 Edit
+              </Button>
+              <Button type="link" icon={<FileImageOutlined />} onClick={() => {
+                setSelectedProduct(record)
+                setImageModalVisible(true)
+              }}>
+                Images
               </Button>
               <Popconfirm
                 title="Delete this product?"
@@ -620,6 +861,7 @@ export default function Products() {
         onCancel={() => setEditModalOpen(false)}
         onOk={handleEditSave}
         okText="Save"
+        confirmLoading={editSaving}
         destroyOnClose
       >
         <Form form={form} layout="vertical">
@@ -671,6 +913,14 @@ export default function Products() {
           </Upload>
         </Space>
       </Modal>
+
+      {/* Manage Images Modal */}
+      <ManageImagesModal
+        product={selectedProduct}
+        visible={imageModalVisible}
+        onClose={() => setImageModalVisible(false)}
+        onSuccess={fetchProducts}
+      />
     </div>
   )
 }
