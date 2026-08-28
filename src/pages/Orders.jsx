@@ -27,15 +27,12 @@ export default function Orders() {
   const [statusFilter, setStatusFilter] = useState(null)
   const [downloadingInvoice, setDownloadingInvoice] = useState(false)
 
-  // Status modal
   const [statusModalOpen, setStatusModalOpen] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState(null)
   const [newStatus, setNewStatus] = useState('')
 
-  // Create order modal open state
   const [createModalOpen, setCreateModalOpen] = useState(false)
 
-  // Fetch orders
   const fetchOrders = async () => {
     setLoading(true)
     let query = supabase
@@ -55,7 +52,6 @@ export default function Orders() {
 
   useEffect(() => { fetchOrders() }, [statusFilter])
 
-  // Status update
   const handleStatusUpdate = async () => {
     if (!newStatus || !selectedOrder) return
     const { error } = await supabase.from('orders').update({ status: newStatus }).eq('id', selectedOrder.id)
@@ -63,25 +59,21 @@ export default function Orders() {
     else { message.success('Status updated'); setStatusModalOpen(false); fetchOrders() }
   }
 
-  // Delete order
   const handleDelete = async (id) => {
     const { error } = await supabase.from('orders').delete().eq('id', id)
     if (error) message.error('Delete failed')
     else { message.success('Order deleted'); fetchOrders() }
   }
 
-  // ---- Download Invoice handler (enriched with product details) ----
   const handleDownloadInvoice = async (order) => {
     setDownloadingInvoice(true)
     try {
-      // 1. Fetch organisation
       const { data: org } = await supabase
         .from('organizations')
         .select('*')
         .eq('slug', 'minal-gems')
         .single()
 
-      // 2. Fetch full order with customer and invoice
       const { data: fullOrder } = await supabase
         .from('orders')
         .select('*, customers(name, email, phone), invoices(*)')
@@ -95,13 +87,11 @@ export default function Orders() {
         return
       }
 
-      // 3. Fetch order items
       const { data: items } = await supabase
         .from('order_items')
         .select('*')
         .eq('order_id', order.id)
 
-      // 4. Enrich each item with product details & diamonds
       const enrichedItems = await Promise.all(
         (items || []).map(async (item) => {
           const prodId = item.product_id
@@ -122,13 +112,13 @@ export default function Orders() {
         })
       )
 
-      // 5. Fetch tax lines & payments
       const [{ data: taxLines }, { data: payments }] = await Promise.all([
         supabase.from('order_tax_lines').select('*').eq('order_id', order.id),
         supabase.from('order_payments').select('*').eq('order_id', order.id),
       ])
 
-      // 6. Generate PDF
+      const invoiceCurrency = invoice.currency || fullOrder.currency || 'INR'
+
       generateInvoicePDF({
         organization: org,
         invoice: {
@@ -137,10 +127,12 @@ export default function Orders() {
           shipping_address: fullOrder.shipping_address,
           order_number: fullOrder.order_number,
           created_at: invoice.created_at,
+          currency: invoiceCurrency,
         },
         items: enrichedItems,
         taxLines: taxLines || [],
         payments: payments || [],
+        currency: invoiceCurrency,
       })
 
       message.success('Invoice PDF generated')
@@ -157,7 +149,16 @@ export default function Orders() {
     shipped: 'purple', delivered: 'green', cancelled: 'red', returned: 'orange'
   }
 
-  // Responsive columns
+  const formatCurrencyForOrder = (amount, currency) => {
+    const cur = currency || 'INR'
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency: cur,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(Number(amount))
+  }
+
   const columns = [
     {
       title: 'Order #',
@@ -190,7 +191,7 @@ export default function Orders() {
       dataIndex: 'grand_total',
       key: 'grand_total',
       sorter: (a, b) => a.grand_total - b.grand_total,
-      render: v => `₹${v?.toLocaleString()}`,
+      render: (v, record) => formatCurrencyForOrder(v, record.currency),
     },
     {
       title: 'Status',
@@ -251,7 +252,6 @@ export default function Orders() {
 
   return (
     <div>
-      {/* Header */}
       <Row justify="space-between" align="middle" gutter={[8, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} sm={12}>
           <Title level={3} style={{ margin: 0 }}>
@@ -268,7 +268,6 @@ export default function Orders() {
         </Col>
       </Row>
 
-      {/* Search & Filter Card */}
       <Card
         title={
           <Space wrap style={{ width: '100%' }}>
@@ -305,7 +304,6 @@ export default function Orders() {
         />
       </Card>
 
-      {/* Status Modal */}
       <Modal
         title="Update Status"
         open={statusModalOpen}
@@ -327,7 +325,6 @@ export default function Orders() {
         </Select>
       </Modal>
 
-      {/* Create Offline Order Modal Component */}
       <CreateOrderModal
         open={createModalOpen}
         onClose={() => setCreateModalOpen(false)}

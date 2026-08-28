@@ -9,6 +9,15 @@ const { Text } = Typography
 const { Panel } = Collapse
 const { Option } = Select
 
+// Currency configuration for display
+const CURRENCY_SYMBOLS = {
+  INR: '₹',
+  USD: '$',
+  EUR: '€',
+  GBP: '£',
+  AED: 'د.إ'
+}
+
 export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
   // State
   const [customers, setCustomers] = useState([])
@@ -24,11 +33,22 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
     { tax_type: 'CGST', rate: 1.5 },
     { tax_type: 'SGST', rate: 1.5 }
   ])
+  const [orderCurrency, setOrderCurrency] = useState('INR')
+  const [exchangeRate, setExchangeRate] = useState(1) // 1 INR = X selected currency
+
+  // Helper to format currency
+  const formatCurrency = (amount, currency = orderCurrency) => {
+    const symbol = CURRENCY_SYMBOLS[currency] || currency + ' '
+    return `${symbol}${Number(amount).toLocaleString('en-IN', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`
+  }
 
   // Load customers & products
   useEffect(() => {
     supabase.from('customers').select('id, name').then(({ data }) => setCustomers(data || []))
-    supabase.from('products').select('id, title, sku, price, item_no').then(({ data }) => setProducts(data || []))
+    supabase.from('products').select('id, title, sku, price, item_no, currency, metal_rate, labour, profit_percent, gold_weight, metal_type, gold_carat').then(({ data }) => setProducts(data || []))
   }, [])
 
   // Customer address
@@ -61,7 +81,7 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
     }
   }
 
-  // Add product to order
+  // Add product to order – convert rates to selected currency using exchangeRate
   const addProduct = async (productId) => {
     const prod = products.find(p => p.id === productId)
     if (!prod) return
@@ -71,25 +91,31 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
       supabase.from('products').select('*').eq('id', productId).single()
     ])
 
+    // Convert INR amounts to selected currency
+    const conv = exchangeRate; // 1 INR = conv selected currency
     const metalWeight = productDetail?.gold_weight || 0
     const metalPurity = productDetail?.gold_carat || 18
-    const metalRate = productDetail?.metal_rate || 0
-    const labour = productDetail?.labour || 0
+    const metalRate = (productDetail?.metal_rate || 0) * conv
+    const labour = (productDetail?.labour || 0) * conv
     const profitPercent = productDetail?.profit_percent || 0
 
+    // Diamonds
     const diamondTotal = diamonds?.reduce((sum, d) => sum + Number(d.total_price), 0) || 0
     const diamondWeight = diamonds?.reduce((sum, d) => sum + Number(d.carat), 0) || 0
     const diamondRate = diamondWeight > 0 ? diamondTotal / diamondWeight : 0
+    // Convert diamond rates and totals
+    const convertedDiamondTotal = diamondTotal * conv
+    const convertedDiamondRate = diamondRate * conv
 
     const metalTotal = metalWeight * metalRate
-    const cost = metalTotal + diamondTotal + labour
+    const cost = metalTotal + convertedDiamondTotal + labour
     const profitAmount = cost * (profitPercent / 100)
     const basePrice = cost + profitAmount
 
     const breakdown = {
       diamond_weight: diamondWeight,
-      diamond_rate: diamondRate,
-      diamond_total: diamondTotal,
+      diamond_rate: convertedDiamondRate,
+      diamond_total: convertedDiamondTotal,
       metal_weight: metalWeight,
       metal_purity: metalPurity,
       metal_rate: metalRate,
@@ -100,10 +126,10 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
       tax_category_id: productDetail?.tax_category_id,
       tax_rate: 0,
       tax_amount: 0,
-      show_breakdown_to_customer: true
+      show_breakdown_to_customer: true,
+      currency: orderCurrency // keep currency for reference
     }
 
-    // Build full product snapshot (to be stored in order_items.metadata)
     const productSnapshot = {
       id: productDetail?.id,
       title: productDetail?.title,
@@ -112,14 +138,14 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
       metal_type: productDetail?.metal_type,
       gold_carat: productDetail?.gold_carat,
       gold_weight: productDetail?.gold_weight,
-      metal_rate: productDetail?.metal_rate,
-      labour: productDetail?.labour,
+      metal_rate: metalRate, // converted
+      labour: labour,       // converted
       profit_percent: productDetail?.profit_percent,
-      profit_amount: productDetail?.profit_amount,
+      profit_amount: profitAmount,
       total_diamond_pcs: productDetail?.total_diamond_pcs,
       total_diamond_carat: productDetail?.total_diamond_carat,
-      total_diamond_price: productDetail?.total_diamond_price,
-      diamonds: diamonds || []
+      total_diamond_price: convertedDiamondTotal,
+      diamonds: diamonds?.map(d => ({ ...d, rate: d.rate * conv, total_price: d.total_price * conv })) || []
     }
 
     setOrderItems(prev => [...prev, {
@@ -130,7 +156,8 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
       price_mode: 'auto',
       unit_price: basePrice,
       breakdown,
-      product_snapshot: productSnapshot   // stored in metadata on submission
+      product_snapshot: productSnapshot,
+      currency: orderCurrency
     }])
   }
 
@@ -187,12 +214,12 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
     ))
   }
 
-  // Totals (per item tax = 0 for manual items; auto items still compute)
+  // Totals (in selected currency)
   const subtotal = orderItems.reduce((sum, i) => sum + i.unit_price * i.quantity, 0)
   const totalTax = orderItems.reduce((sum, i) => sum + (i.price_mode === 'auto' ? i.breakdown.tax_amount : 0) * i.quantity, 0)
   const finalGrandTotal = subtotal + totalTax + (orderMeta.shipping || 0) - (orderMeta.discount || 0)
 
-  // Create order
+  // Create order – save all monetary values in selected currency
   const handleCreateOrder = async () => {
     if (orderItems.length === 0) { message.error('Add at least one product'); return }
     if (!selectedCustomerId && !newCustomer.name) { message.error('Select or enter a customer'); return }
@@ -218,7 +245,8 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
       tax_amount: totalTax,
       discount_amount: orderMeta.discount,
       grand_total: finalGrandTotal,
-      currency: 'INR',
+      currency: orderCurrency,
+      exchange_rate: exchangeRate,     // optionally store the rate used
       shipping_address: shippingAddress,
       billing_address: shippingAddress,
       customer_note: orderMeta.notes,
@@ -236,14 +264,14 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
       quantity: item.quantity,
       unit_price: item.unit_price,
       total_price: item.quantity * item.unit_price,
-      currency: 'INR',
+      currency: orderCurrency,
       discount_amount: 0,
       tax_amount: item.price_mode === 'auto' ? item.breakdown.tax_amount * item.quantity : 0,
       metadata: {
         price_mode: item.price_mode,
         breakdown: item.breakdown,
         show_breakdown_to_customer: item.breakdown.show_breakdown_to_customer,
-        product_snapshot: item.product_snapshot   // ← full product details stored here
+        product_snapshot: item.product_snapshot
       }
     }))
     await supabase.from('order_items').insert(itemsToInsert)
@@ -255,7 +283,8 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
         tax_type: tl.tax_type,
         tax_rate: tl.rate,
         taxable_amount: subtotal,
-        tax_amount: subtotal * tl.rate / 100
+        tax_amount: subtotal * tl.rate / 100,
+        currency: orderCurrency
       }))
       await supabase.from('order_tax_lines').insert(taxRows)
     }
@@ -269,7 +298,7 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
       tax_amount: totalTax,
       shipping_cost: orderMeta.shipping,
       total: finalGrandTotal,
-      currency: 'INR'
+      currency: orderCurrency
     }])
 
     message.success('Offline order created')
@@ -280,6 +309,8 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
     setShippingAddress({ full_name: '', line1: '', city: '', state: '', postal_code: '', country: 'IN', phone: '' })
     setOrderMeta({ shipping: 0, discount: 0, notes: '' })
     setTaxLines([{ tax_type: 'CGST', rate: 1.5 }, { tax_type: 'SGST', rate: 1.5 }])
+    setOrderCurrency('INR')
+    setExchangeRate(1)
     onSuccess()
     onClose()
   }
@@ -296,6 +327,41 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
       destroyOnClose
     >
       <Form layout="vertical">
+        {/* Currency and exchange rate */}
+        <Row gutter={16}>
+          <Col xs={24} sm={12}>
+            <Form.Item label="Currency">
+              <Select
+                value={orderCurrency}
+                onChange={(val) => {
+                  setOrderCurrency(val)
+                  if (val === 'INR') setExchangeRate(1)
+                }}
+                style={{ width: '100%' }}
+              >
+                <Option value="INR">₹ INR – Indian Rupee</Option>
+                <Option value="USD">$ USD – US Dollar</Option>
+                <Option value="EUR">€ EUR – Euro</Option>
+                <Option value="GBP">£ GBP – British Pound</Option>
+                <Option value="AED">د.إ AED – UAE Dirham</Option>
+              </Select>
+            </Form.Item>
+          </Col>
+          {orderCurrency !== 'INR' && (
+            <Col xs={24} sm={12}>
+              <Form.Item label={`Exchange Rate (1 INR = ? ${orderCurrency})`}>
+                <InputNumber
+                  min={0}
+                  step={0.0001}
+                  value={exchangeRate}
+                  onChange={val => setExchangeRate(val || 1)}
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Col>
+          )}
+        </Row>
+
         {/* Customer selection */}
         <Row gutter={[16, 16]}>
           <Col xs={24} sm={12}>
@@ -387,7 +453,7 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
           {orderItems.map(item => (
             <Panel
               key={item.product_id}
-              header={`${item.title} (${item.sku}) – Qty: ${item.quantity} – ₹${item.unit_price?.toLocaleString()}`}
+              header={`${item.title} (${item.sku}) – Qty: ${item.quantity} – ${formatCurrency(item.unit_price, orderCurrency)}`}
               extra={
                 <Space wrap>
                   <Switch
@@ -427,7 +493,7 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
                 {/* Manual Price Input (only when manual) */}
                 {item.price_mode === 'manual' && (
                   <Col xs={24} sm={8}>
-                    <Form.Item label="Final Price (₹)">
+                    <Form.Item label={`Final Price (${orderCurrency})`}>
                       <InputNumber
                         min={0}
                         value={item.unit_price}
@@ -449,7 +515,7 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
                       </Form.Item>
                     </Col>
                     <Col xs={24} sm={8}>
-                      <Form.Item label="Rate / Carat">
+                      <Form.Item label={`Rate / Carat (${orderCurrency})`}>
                         <InputNumber value={item.breakdown.diamond_rate}
                           onChange={val => updateBreakdown(item.product_id, 'diamond_rate', val)} style={{ width: '100%' }} />
                       </Form.Item>
@@ -474,7 +540,7 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
                       </Form.Item>
                     </Col>
                     <Col xs={24} sm={6}>
-                      <Form.Item label="Rate / g">
+                      <Form.Item label={`Rate / g (${orderCurrency})`}>
                         <InputNumber value={item.breakdown.metal_rate}
                           onChange={val => updateBreakdown(item.product_id, 'metal_rate', val)} style={{ width: '100%' }} />
                       </Form.Item>
@@ -487,7 +553,7 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
 
                     <Col span={24}><Text strong>🧰 Labour</Text></Col>
                     <Col xs={24} sm={12}>
-                      <Form.Item label="Labour Amount">
+                      <Form.Item label={`Labour Amount (${orderCurrency})`}>
                         <InputNumber value={item.breakdown.labour}
                           onChange={val => updateBreakdown(item.product_id, 'labour', val)} style={{ width: '100%' }} />
                       </Form.Item>
@@ -521,7 +587,7 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
                 )}
 
                 <Col span={24}>
-                  <Text strong>🏷️ Final Selling Price (before tax): ₹{item.unit_price?.toLocaleString()}</Text>
+                  <Text strong>🏷️ Final Selling Price (before tax): {formatCurrency(item.unit_price, orderCurrency)}</Text>
                 </Col>
               </Row>
             </Panel>
@@ -557,7 +623,7 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
         <Row>
           <Col span={24} style={{ textAlign: 'right', marginTop: 12 }}>
             <Text strong style={{ fontSize: 18, color: '#B8860B' }}>
-              Grand Total: ₹{finalGrandTotal.toLocaleString()}
+              Grand Total: {formatCurrency(finalGrandTotal, orderCurrency)}
             </Text>
           </Col>
         </Row>

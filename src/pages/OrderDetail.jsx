@@ -34,6 +34,20 @@ export default function OrderDetail() {
   const [paymentModal, setPaymentModal] = useState(false)
   const [shipmentModal, setShipmentModal] = useState(false)
 
+  // Currency formatter
+  const formatCurrency = (amount, currency = order?.currency || 'INR') => {
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: 'currency',
+        currency,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(Number(amount))
+    } catch {
+      return `${currency} ${Number(amount).toFixed(2)}`
+    }
+  }
+
   // Fetch all data
   const fetchOrder = async () => {
     try {
@@ -82,7 +96,7 @@ export default function OrderDetail() {
       quantity: item.quantity,
       unit_price: item.unit_price,
       total_price: item.quantity * item.unit_price,
-      currency: 'INR',
+      currency: order.currency || 'INR',
       discount_amount: item.discount_amount || 0,
       tax_amount: item.tax_amount || 0,
       metadata: item.metadata || {}
@@ -109,6 +123,7 @@ export default function OrderDetail() {
       product_slug: '',
       quantity: 1,
       unit_price: prod.price,
+      currency: order.currency || 'INR',
       discount_amount: 0,
       tax_amount: 0,
       metadata: {}
@@ -125,7 +140,7 @@ export default function OrderDetail() {
 
   // Add payment
   const handleAddPayment = async (values) => {
-    const { error } = await supabase.from('order_payments').insert([{ ...values, order_id: id }])
+    const { error } = await supabase.from('order_payments').insert([{ ...values, order_id: id, currency: order.currency || 'INR' }])
     if (error) message.error('Failed to add payment')
     else { message.success('Payment added'); setPaymentModal(false); fetchOrder() }
   }
@@ -142,8 +157,8 @@ export default function OrderDetail() {
     { title: 'Product', dataIndex: 'product_title', key: 'product_title' },
     { title: 'SKU', dataIndex: 'product_sku', key: 'product_sku', responsive: ['sm'] },
     { title: 'Qty', dataIndex: 'quantity', key: 'quantity' },
-    { title: 'Unit Price', dataIndex: 'unit_price', key: 'unit_price', render: v => `₹${v?.toLocaleString()}` },
-    { title: 'Total', dataIndex: 'total_price', key: 'total_price', render: v => `₹${v?.toLocaleString()}` },
+    { title: 'Unit Price', dataIndex: 'unit_price', key: 'unit_price', render: (v, record) => formatCurrency(v, record.currency) },
+    { title: 'Total', dataIndex: 'total_price', key: 'total_price', render: (v, record) => formatCurrency(v, record.currency) },
   ]
 
   if (loading) return <div style={{ padding: 24, textAlign: 'center' }}>Loading…</div>
@@ -172,13 +187,14 @@ export default function OrderDetail() {
             <Descriptions bordered column={{ xs: 1, sm: 2 }}>
               <Descriptions.Item label="Customer">{order.customers?.name || order.shipping_address?.full_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="Email">{order.customers?.email || '-'}</Descriptions.Item>
-              <Descriptions.Item label="Subtotal">₹{order.subtotal?.toLocaleString()}</Descriptions.Item>
-              <Descriptions.Item label="Tax">₹{order.tax_amount?.toLocaleString()}</Descriptions.Item>
-              <Descriptions.Item label="Discount">₹{order.discount_amount?.toLocaleString()}</Descriptions.Item>
-              <Descriptions.Item label="Shipping">₹{order.shipping_cost?.toLocaleString()}</Descriptions.Item>
+              <Descriptions.Item label="Subtotal">{formatCurrency(order.subtotal)}</Descriptions.Item>
+              <Descriptions.Item label="Tax">{formatCurrency(order.tax_amount)}</Descriptions.Item>
+              <Descriptions.Item label="Discount">{formatCurrency(order.discount_amount)}</Descriptions.Item>
+              <Descriptions.Item label="Shipping">{formatCurrency(order.shipping_cost)}</Descriptions.Item>
+              <Descriptions.Item label="Currency">{order.currency || 'INR'}</Descriptions.Item>
               <Descriptions.Item label="Grand Total" span={2}>
                 <Text strong style={{ fontSize: 18, color: '#B8860B' }}>
-                  ₹{order.grand_total?.toLocaleString()}
+                  {formatCurrency(order.grand_total)}
                 </Text>
               </Descriptions.Item>
             </Descriptions>
@@ -206,13 +222,12 @@ export default function OrderDetail() {
                   optionFilterProp="children"
                 >
                   {products.map(p => (
-                    <Option key={p.id} value={p.id}>{p.title} (₹{p.price})</Option>
+                    <Option key={p.id} value={p.id}>{p.title} ({formatCurrency(p.price)})</Option>
                   ))}
                 </Select>
 
                 {editedItems.map((item, idx) => (
                   <Row gutter={[8, 8]} key={idx} style={{ marginBottom: 12 }}>
-                    {/* On mobile stack each field full width */}
                     <Col xs={24} sm={8}>
                       <Input
                         value={item.product_title}
@@ -239,7 +254,7 @@ export default function OrderDetail() {
                       />
                     </Col>
                     <Col xs={16} sm={6}>
-                      <Text strong>₹{(item.quantity * item.unit_price).toLocaleString()}</Text>
+                      <Text strong>{formatCurrency(item.quantity * item.unit_price)}</Text>
                     </Col>
                     <Col xs={8} sm={2}>
                       <Button danger size="small" onClick={() => removeItem(idx)} block>
@@ -280,7 +295,7 @@ export default function OrderDetail() {
             >
               <Table.Column title="Method" dataIndex="payment_method" />
               <Table.Column title="Transaction ID" dataIndex="transaction_id" ellipsis responsive={['sm']} />
-              <Table.Column title="Amount" dataIndex="amount" render={v => `₹${v?.toLocaleString()}`} />
+              <Table.Column title="Amount" dataIndex="amount" render={(v, record) => formatCurrency(v, record.currency)} />
               <Table.Column title="Status" dataIndex="status" render={s => <Tag>{s?.toUpperCase()}</Tag>} />
               <Table.Column title="Date" dataIndex="paid_at" render={d => d ? dayjs(d).format('DD/MM/YYYY') : '-'} responsive={['md']} />
             </Table>
@@ -311,7 +326,7 @@ export default function OrderDetail() {
         </>
       )}
 
-      {/* Payment Modal – fields stack on mobile */}
+      {/* Payment Modal */}
       <Modal
         title="Add Payment"
         open={paymentModal}
@@ -342,7 +357,7 @@ export default function OrderDetail() {
         </Form>
       </Modal>
 
-      {/* Shipment Modal – fields stack on mobile */}
+      {/* Shipment Modal */}
       <Modal
         title="Add Shipment"
         open={shipmentModal}

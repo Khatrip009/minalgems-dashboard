@@ -1,8 +1,23 @@
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
-const CURRENCY_SYMBOL = 'Rs. '
+// ─── Currency Configuration ─────────────────────────────────
+const CURRENCY_CONFIG = {
+  INR: { symbol: '₹', name: 'Rupee', subunit: 'Paisa', locale: 'en-IN', decimals: 2 },
+  USD: { symbol: '$', name: 'Dollar', subunit: 'Cent', locale: 'en-US', decimals: 2 },
+  EUR: { symbol: '€', name: 'Euro', subunit: 'Cent', locale: 'de-DE', decimals: 2 },
+  GBP: { symbol: '£', name: 'Pound', subunit: 'Penny', locale: 'en-GB', decimals: 2 },
+  AED: { symbol: 'د.إ', name: 'Dirham', subunit: 'Fils', locale: 'ar-AE', decimals: 2 },
+  // Add more as needed
+}
 
+const DEFAULT_CURRENCY = 'INR'
+
+function getCurrencyConfig(currency) {
+  return CURRENCY_CONFIG[currency] || CURRENCY_CONFIG[DEFAULT_CURRENCY]
+}
+
+// ─── Address Parser ─────────────────────────────────────────
 function parseAddress(addr) {
   if (!addr) return {}
   if (typeof addr === 'object') return addr
@@ -13,19 +28,25 @@ function parseAddress(addr) {
   }
 }
 
-function formatCurrency(amount) {
-  return `${CURRENCY_SYMBOL}${Number(amount).toLocaleString('en-IN', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`
+// ─── Currency Formatter ─────────────────────────────────────
+function formatCurrency(amount, currency = DEFAULT_CURRENCY) {
+  const config = getCurrencyConfig(currency)
+  return new Intl.NumberFormat(config.locale, {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: config.decimals,
+    maximumFractionDigits: config.decimals,
+  }).format(Number(amount))
 }
 
-function numberToIndianWords(amount) {
+// ─── Number to Words (Indian Numbering System) ─────────────
+function numberToWords(amount, currency = DEFAULT_CURRENCY) {
   const num = Number(amount)
   if (isNaN(num)) return ''
 
+  const config = getCurrencyConfig(currency)
   const integerPart = Math.floor(Math.abs(num))
-  const decimalPart = Math.round((Math.abs(num) - integerPart) * 100)
+  const decimalPart = Math.round((Math.abs(num) - integerPart) * Math.pow(10, config.decimals))
 
   const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine']
   const teens = ['Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen']
@@ -44,9 +65,7 @@ function numberToIndianWords(amount) {
       str += teens[n - 10] + ' '
       n = 0
     }
-    if (n > 0) {
-      str += ones[n] + ' '
-    }
+    if (n > 0) str += ones[n] + ' '
     return str.trim()
   }
 
@@ -66,9 +85,9 @@ function numberToIndianWords(amount) {
     return result.trim()
   }
 
-  let result = convertIndian(integerPart) + ' Rupee' + (integerPart !== 1 ? 's' : '')
+  let result = convertIndian(integerPart) + ' ' + config.name + (integerPart !== 1 ? 's' : '')
   if (decimalPart > 0) {
-    result += ' and ' + convertIndian(decimalPart) + ' Pais' + (decimalPart !== 1 ? 'e' : '')
+    result += ' and ' + convertIndian(decimalPart) + ' ' + config.subunit + (decimalPart !== 1 ? 's' : '')
   }
   return result.replace(/\s+/g, ' ').trim()
 }
@@ -78,7 +97,7 @@ function numberToIndianWords(amount) {
  * - If price_mode is "manual", show only item name and final price.
  * - Otherwise (auto), show full breakdown from product_snapshot or fallback to product_details.
  */
-function buildProductDescription(item) {
+function buildProductDescription(item, currency = DEFAULT_CURRENCY) {
   const metadata = item.metadata || {}
   const priceMode = metadata.price_mode || item.price_mode || 'auto'
   const breakdown = metadata.breakdown || item.breakdown || {}
@@ -87,7 +106,6 @@ function buildProductDescription(item) {
   const title = item.product_title || item.title || product.title || 'Product'
   const itemNo = product.item_no || product.sku || item.product_sku || ''
 
-  // If manual price mode → no detailed breakdown
   if (priceMode === 'manual') {
     if (itemNo) return `Item No: ${itemNo}  |  ${title}`
     return title
@@ -100,35 +118,29 @@ function buildProductDescription(item) {
     lines.push(title)
   }
 
-  // ---- Diamonds (individual) ----
+  // Diamonds
   const diamonds = product.diamonds || []
   if (diamonds.length > 0) {
     lines.push('Diamonds:')
     diamonds.forEach((d, i) => {
-      const details = [
-        d.diamond_type || '',
-        d.shape || '',
-        d.color || '',
-        d.clarity || ''
-      ].filter(Boolean).join(' ')
+      const details = [d.diamond_type, d.shape, d.color, d.clarity].filter(Boolean).join(' ')
       const carat = Number(d.carat).toFixed(3)
-      const rate = formatCurrency(d.rate)
-      const total = formatCurrency(d.total_price)
+      const rate = formatCurrency(d.rate, currency)
+      const total = formatCurrency(d.total_price, currency)
       lines.push(`${i + 1}. ${details}  ${carat} ct  x  ${rate}/ct  =  ${total}`)
     })
-
     const totalCarat = diamonds.reduce((s, d) => s + Number(d.carat), 0)
     const totalPrice = diamonds.reduce((s, d) => s + Number(d.total_price), 0)
     const avgRate = totalCarat > 0 ? totalPrice / totalCarat : 0
-    lines.push(`Total Diamonds: ${totalCarat.toFixed(3)} ct, Avg Rate: ${formatCurrency(avgRate)}/ct, Total: ${formatCurrency(totalPrice)}`)
+    lines.push(`Total Diamonds: ${totalCarat.toFixed(3)} ct, Avg Rate: ${formatCurrency(avgRate, currency)}/ct, Total: ${formatCurrency(totalPrice, currency)}`)
   } else if (breakdown.diamond_total > 0 || breakdown.diamond_weight > 0) {
     const dWeight = breakdown.diamond_weight || 0
     const dTotal = breakdown.diamond_total || 0
     const dRate = dWeight > 0 ? dTotal / dWeight : breakdown.diamond_rate || 0
-    lines.push(`Diamonds: ${Number(dWeight).toFixed(3)} ct x ${formatCurrency(dRate)}/ct = ${formatCurrency(dTotal)}`)
+    lines.push(`Diamonds: ${Number(dWeight).toFixed(3)} ct x ${formatCurrency(dRate, currency)}/ct = ${formatCurrency(dTotal, currency)}`)
   }
 
-  // ---- Metal ----
+  // Metal
   const metalType = product.metal_type || 'Gold'
   const goldCarat = product.gold_carat || ''
   let metalWeight = product.gold_weight || breakdown.metal_weight || 0
@@ -138,27 +150,29 @@ function buildProductDescription(item) {
     metalTotal = metalWeight * metalRate
   }
   if (metalWeight > 0 || metalTotal > 0) {
-    lines.push(
-      `Metal: ${metalType} ${goldCarat}K, ${Number(metalWeight).toFixed(3)} g x ${formatCurrency(metalRate)}/g = ${formatCurrency(metalTotal)}`
-    )
+    lines.push(`Metal: ${metalType} ${goldCarat}K, ${Number(metalWeight).toFixed(3)} g x ${formatCurrency(metalRate, currency)}/g = ${formatCurrency(metalTotal, currency)}`)
   }
 
-  // ---- Labour ----
+  // Labour
   const labour = product.labour || breakdown.labour || 0
   if (labour > 0) {
-    lines.push(`Labour: ${formatCurrency(labour)}`)
+    lines.push(`Labour: ${formatCurrency(labour, currency)}`)
   }
 
-  // ---- Profit (optional, only if we want to show) ----
-  // We'll skip profit in PDF description for now; can be added if needed.
-
-  // ---- Total (excl. tax) ----
-  lines.push(`Total (excl. tax): ${formatCurrency(item.unit_price)}`)
+  // Total excl tax
+  lines.push(`Total (excl. tax): ${formatCurrency(item.unit_price, currency)}`)
 
   return lines.join('\n')
 }
 
-export function generateInvoicePDF({ organization, invoice, items, taxLines = [], payments = [] }) {
+export function generateInvoicePDF({
+  organization,
+  invoice,
+  items,
+  taxLines = [],
+  payments = [],
+  currency = DEFAULT_CURRENCY,
+}) {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
 
   const pageWidth = doc.internal.pageSize.getWidth()
@@ -248,6 +262,7 @@ export function generateInvoicePDF({ organization, invoice, items, taxLines = []
     { label: 'Invoice Number:', value: invoice?.invoice_number || 'INV-XXX' },
     { label: 'Invoice Date:', value: invoice?.created_at ? new Date(invoice.created_at).toLocaleDateString('en-IN') : '' },
     { label: 'Order Number:', value: invoice?.order_number || '' },
+    { label: 'Currency:', value: currency },
     { label: 'Status:', value: invoice?.status?.toUpperCase() || '' },
   ]
 
@@ -276,13 +291,13 @@ export function generateInvoicePDF({ organization, invoice, items, taxLines = []
 
   const tableRows = items.map((item, idx) => ({
     sr: idx + 1,
-    title: buildProductDescription(item),
+    title: buildProductDescription(item, currency),
     hsn: item.hsn_code || '7113',
     qty: item.quantity,
-    unit_price: formatCurrency(item.unit_price),
+    unit_price: formatCurrency(item.unit_price, currency),
     tax_rate: `${((item.tax_amount / (item.unit_price * item.quantity)) * 100 || 0).toFixed(1)}%`,
-    tax_amount: formatCurrency(item.tax_amount),
-    total: formatCurrency(item.quantity * item.unit_price + (item.tax_amount || 0)),
+    tax_amount: formatCurrency(item.tax_amount, currency),
+    total: formatCurrency(item.quantity * item.unit_price + (item.tax_amount || 0), currency),
   }))
 
   autoTable(doc, {
@@ -341,16 +356,16 @@ export function generateInvoicePDF({ organization, invoice, items, taxLines = []
     if (bold) doc.setFont('helvetica', 'normal')
   }
 
-  drawTotal('Subtotal:', formatCurrency(subtotal))
-  if (discount > 0) drawTotal('Discount:', formatCurrency(discount))
-  if (shipping > 0) drawTotal('Shipping:', formatCurrency(shipping))
-  drawTotal('Total Tax:', formatCurrency(totalTax))
-  drawTotal('Grand Total:', formatCurrency(grandTotal), true)
+  drawTotal('Subtotal:', formatCurrency(subtotal, currency))
+  if (discount > 0) drawTotal('Discount:', formatCurrency(discount, currency))
+  if (shipping > 0) drawTotal('Shipping:', formatCurrency(shipping, currency))
+  drawTotal('Total Tax:', formatCurrency(totalTax, currency))
+  drawTotal('Grand Total:', formatCurrency(grandTotal, currency), true)
 
   // ─── Amount in Words ───────────────────────────────────────
   y += 2
   doc.setFontSize(9).setFont('helvetica', 'italic')
-  const amountWords = numberToIndianWords(grandTotal)
+  const amountWords = numberToWords(grandTotal, currency)
   doc.text(`Amount in Words: ${amountWords}`, margin, y)
   y += 6
 
@@ -363,7 +378,7 @@ export function generateInvoicePDF({ organization, invoice, items, taxLines = []
     taxLines.forEach(tl => {
       doc.setFont('helvetica', 'normal')
       doc.text(`${tl.tax_type} @ ${tl.rate}%`, margin + 5, y)
-      doc.text(formatCurrency(tl.tax_amount || 0), totalX + 55, y, { align: 'right' })
+      doc.text(formatCurrency(tl.tax_amount || 0, currency), totalX + 55, y, { align: 'right' })
       y += lineH
     })
   }
@@ -378,7 +393,7 @@ export function generateInvoicePDF({ organization, invoice, items, taxLines = []
       doc.setFont('helvetica', 'normal')
       const paidOn = p.paid_at ? new Date(p.paid_at).toLocaleDateString('en-IN') : '-'
       doc.text(`${p.payment_method?.toUpperCase()} | ${paidOn}`, margin + 5, y)
-      doc.text(formatCurrency(p.amount), totalX + 55, y, { align: 'right' })
+      doc.text(formatCurrency(p.amount, currency), totalX + 55, y, { align: 'right' })
       y += lineH
     })
   }

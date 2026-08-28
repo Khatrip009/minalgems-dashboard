@@ -10,7 +10,7 @@ function getApiBaseUrl() {
 
 // ---- Public file base URL (for serving images / videos) ----
 const DEV_PUBLIC_BASE = 'http://localhost:4900'
-const PROD_PUBLIC_BASE = 'https://storage.minalgem.com'
+const PROD_PUBLIC_BASE = 'https://files.minalgem.com'
 
 function getPublicBaseUrl() {
   return import.meta.env.PROD ? PROD_PUBLIC_BASE : DEV_PUBLIC_BASE
@@ -88,7 +88,7 @@ export async function uploadFile(file, folder = 'products') {
   }
 
   const data = await response.json()
-  // data.url looks like: "https://storage.minalgem.com/products/file.jpg"
+  // data.url looks like: "https://files.minalgem.com/products/file.jpg"
   // Extract relative path (folder/filename)
   try {
     const urlObj = new URL(data.url)
