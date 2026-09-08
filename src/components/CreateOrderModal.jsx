@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import {
   Modal, Form, Input, InputNumber, Select, Button, Row, Col, Divider,
-  Collapse, Switch, Tag, Space, Typography, message, Radio
+  Collapse, Switch, Tag, Space, Typography, message, Radio, Spin
 } from 'antd'
 import { supabase } from '../lib/supabase'
 
@@ -9,13 +9,22 @@ const { Text } = Typography
 const { Panel } = Collapse
 const { Option } = Select
 
-// Currency configuration for display
+// Currency configuration
 const CURRENCY_SYMBOLS = {
   INR: '₹',
   USD: '$',
   EUR: '€',
   GBP: '£',
   AED: 'د.إ'
+}
+
+// Fallback exchange rates (1 INR = X currency) – updated periodically
+const FALLBACK_RATES = {
+  INR: 1,
+  USD: 0.012,
+  EUR: 0.011,
+  GBP: 0.0095,
+  AED: 0.044
 }
 
 export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
@@ -34,7 +43,9 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
     { tax_type: 'SGST', rate: 1.5 }
   ])
   const [orderCurrency, setOrderCurrency] = useState('INR')
-  const [exchangeRate, setExchangeRate] = useState(1) // 1 INR = X selected currency
+  const [exchangeRate, setExchangeRate] = useState(1)
+  const [rateLoading, setRateLoading] = useState(false)
+  const [rateSource, setRateSource] = useState('default') // 'api' | 'fallback' | 'manual'
 
   // Helper to format currency
   const formatCurrency = (amount, currency = orderCurrency) => {
@@ -47,9 +58,78 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
 
   // Load customers & products
   useEffect(() => {
-    supabase.from('customers').select('id, name').then(({ data }) => setCustomers(data || []))
-    supabase.from('products').select('id, title, sku, price, item_no, currency, metal_rate, labour, profit_percent, gold_weight, metal_type, gold_carat').then(({ data }) => setProducts(data || []))
+    supabase.from('customers').select('id, name').then(({ data, error }) => {
+      if (error) message.error('Failed to load customers')
+      else setCustomers(data || [])
+    })
+    supabase.from('products').select('id, title, sku, price, item_no, currency, metal_rate, labour, profit_percent, gold_weight, metal_type, gold_carat').then(({ data, error }) => {
+      if (error) message.error('Failed to load products')
+      else setProducts(data || [])
+    })
   }, [])
+
+  // Fetch exchange rate with multi-source fallback
+  const fetchExchangeRate = async () => {
+    if (orderCurrency === 'INR') {
+      setExchangeRate(1)
+      setRateSource('default')
+      return
+    }
+
+    setRateLoading(true)
+    setRateSource('loading')
+
+    const endpoints = [
+      `https://api.frankfurter.app/latest?from=INR&to=${orderCurrency}`,
+      `https://open.er-api.com/v6/latest/INR`,
+      `https://api.exchangerate.host/latest?base=INR&symbols=${orderCurrency}`
+    ]
+
+    for (const endpoint of endpoints) {
+      try {
+        const res = await fetch(endpoint)
+        if (!res.ok) continue
+        const data = await res.json()
+        let rate = null
+        if (data.rates) {
+          // Handle different response formats
+          if (endpoint.includes('frankfurter')) {
+            rate = data.rates[orderCurrency]
+          } else if (endpoint.includes('open.er-api')) {
+            rate = data.rates[orderCurrency]
+          } else if (endpoint.includes('exchangerate.host')) {
+            rate = data.rates[orderCurrency]
+          }
+        }
+        if (rate && !isNaN(rate)) {
+          setExchangeRate(rate)
+          setRateSource('api')
+          setRateLoading(false)
+          return
+        }
+      } catch (err) {
+        // continue to next endpoint
+        console.warn('Exchange rate fetch failed:', endpoint, err)
+      }
+    }
+
+    // Fallback to hardcoded rate
+    const fallback = FALLBACK_RATES[orderCurrency]
+    if (fallback) {
+      setExchangeRate(fallback)
+      setRateSource('fallback')
+      message.warning(`Using offline fallback rate: 1 INR = ${fallback} ${orderCurrency}`)
+    } else {
+      setExchangeRate(1)
+      setRateSource('fallback')
+      message.error('No fallback rate available, please enter manually')
+    }
+    setRateLoading(false)
+  }
+
+  useEffect(() => {
+    fetchExchangeRate()
+  }, [orderCurrency])
 
   // Customer address
   const handleCustomerSelect = async (customerId) => {
@@ -59,12 +139,16 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
       setShippingAddress({ full_name: '', line1: '', city: '', state: '', postal_code: '', country: 'IN', phone: '' })
       return
     }
-    const { data: addrs } = await supabase
+    const { data: addrs, error } = await supabase
       .from('customer_addresses')
       .select('*')
       .eq('customer_id', customerId)
       .order('is_default_shipping', { ascending: false })
       .limit(1)
+    if (error) {
+      message.error('Failed to fetch address')
+      return
+    }
     if (addrs && addrs.length > 0) {
       const addr = addrs[0]
       setShippingAddress({
@@ -77,33 +161,36 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
         phone: addr.phone || ''
       })
     } else {
-      setShippingAddress({ full_name: '', line1: '', city: '', state: '', postal_code: '', country: 'IN', phone: '' })
+      const customer = customers.find(c => c.id === customerId)
+      setShippingAddress(prev => ({ ...prev, full_name: customer?.name || '', line1: '', city: '', state: '', postal_code: '', country: 'IN', phone: '' }))
     }
   }
 
-  // Add product to order – convert rates to selected currency using exchangeRate
+  // Add product to order
   const addProduct = async (productId) => {
     const prod = products.find(p => p.id === productId)
     if (!prod) return
 
-    const [{ data: diamonds }, { data: productDetail }] = await Promise.all([
-      supabase.from('product_diamonds').select('*').eq('product_id', productId),
-      supabase.from('products').select('*').eq('id', productId).single()
-    ])
+    if (orderItems.some(item => item.product_id === productId)) {
+      message.warning('Product already in order. Increase quantity instead.')
+      return
+    }
 
-    // Convert INR amounts to selected currency
-    const conv = exchangeRate; // 1 INR = conv selected currency
-    const metalWeight = productDetail?.gold_weight || 0
-    const metalPurity = productDetail?.gold_carat || 18
-    const metalRate = (productDetail?.metal_rate || 0) * conv
-    const labour = (productDetail?.labour || 0) * conv
-    const profitPercent = productDetail?.profit_percent || 0
+    const { data: diamonds } = await supabase
+      .from('product_diamonds')
+      .select('*')
+      .eq('product_id', productId)
 
-    // Diamonds
+    const conv = exchangeRate
+    const metalWeight = prod.gold_weight || 0
+    const metalPurity = prod.gold_carat || 18
+    const metalRate = (prod.metal_rate || 0) * conv
+    const labour = (prod.labour || 0) * conv
+    const profitPercent = prod.profit_percent || 0
+
     const diamondTotal = diamonds?.reduce((sum, d) => sum + Number(d.total_price), 0) || 0
     const diamondWeight = diamonds?.reduce((sum, d) => sum + Number(d.carat), 0) || 0
     const diamondRate = diamondWeight > 0 ? diamondTotal / diamondWeight : 0
-    // Convert diamond rates and totals
     const convertedDiamondTotal = diamondTotal * conv
     const convertedDiamondRate = diamondRate * conv
 
@@ -123,27 +210,24 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
       labour: labour,
       profit_percent: profitPercent,
       profit_amount: profitAmount,
-      tax_category_id: productDetail?.tax_category_id,
-      tax_rate: 0,
-      tax_amount: 0,
       show_breakdown_to_customer: true,
-      currency: orderCurrency // keep currency for reference
+      currency: orderCurrency
     }
 
     const productSnapshot = {
-      id: productDetail?.id,
-      title: productDetail?.title,
-      sku: productDetail?.sku,
-      item_no: productDetail?.item_no,
-      metal_type: productDetail?.metal_type,
-      gold_carat: productDetail?.gold_carat,
-      gold_weight: productDetail?.gold_weight,
-      metal_rate: metalRate, // converted
-      labour: labour,       // converted
-      profit_percent: productDetail?.profit_percent,
+      id: prod.id,
+      title: prod.title,
+      sku: prod.sku,
+      item_no: prod.item_no,
+      metal_type: prod.metal_type,
+      gold_carat: prod.gold_carat,
+      gold_weight: prod.gold_weight,
+      metal_rate: metalRate,
+      labour: labour,
+      profit_percent: profitPercent,
       profit_amount: profitAmount,
-      total_diamond_pcs: productDetail?.total_diamond_pcs,
-      total_diamond_carat: productDetail?.total_diamond_carat,
+      total_diamond_pcs: prod.total_diamond_pcs || null,
+      total_diamond_carat: prod.total_diamond_carat || null,
       total_diamond_price: convertedDiamondTotal,
       diamonds: diamonds?.map(d => ({ ...d, rate: d.rate * conv, total_price: d.total_price * conv })) || []
     }
@@ -175,13 +259,12 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
       const cost = bd.metal_total + bd.diamond_total + bd.labour
       bd.profit_amount = cost * (bd.profit_percent / 100)
       const finalPrice = cost + bd.profit_amount
-      bd.tax_amount = finalPrice * ((bd.tax_rate || 0) / 100)
       return { ...item, unit_price: finalPrice, breakdown: bd }
     }))
   }
 
   const updateItemQuantity = (id, qty) => {
-    setOrderItems(prev => prev.map(i => i.product_id === id ? { ...i, quantity: qty } : i))
+    setOrderItems(prev => prev.map(i => i.product_id === id ? { ...i, quantity: qty || 1 } : i))
   }
 
   const removeProductFromOrder = (id) => {
@@ -193,15 +276,12 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
     setOrderItems(prev => prev.map(item => {
       if (item.product_id !== productId) return item
       if (mode === 'auto') {
-        // Recalculate unit price from breakdown
         const bd = { ...item.breakdown }
         const cost = bd.metal_total + bd.diamond_total + bd.labour
         const profitAmount = cost * (bd.profit_percent / 100)
         const finalPrice = cost + profitAmount
-        bd.tax_amount = finalPrice * ((bd.tax_rate || 0) / 100)
         return { ...item, price_mode: 'auto', unit_price: finalPrice, breakdown: bd }
       } else {
-        // Switch to manual; keep current unit_price
         return { ...item, price_mode: 'manual' }
       }
     }))
@@ -214,105 +294,112 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
     ))
   }
 
-  // Totals (in selected currency)
+  // Totals
   const subtotal = orderItems.reduce((sum, i) => sum + i.unit_price * i.quantity, 0)
-  const totalTax = orderItems.reduce((sum, i) => sum + (i.price_mode === 'auto' ? i.breakdown.tax_amount : 0) * i.quantity, 0)
+  const totalTax = taxLines
+    .filter(tl => tl.tax_type && tl.rate > 0)
+    .reduce((sum, tl) => sum + (subtotal * tl.rate / 100), 0)
   const finalGrandTotal = subtotal + totalTax + (orderMeta.shipping || 0) - (orderMeta.discount || 0)
 
-  // Create order – save all monetary values in selected currency
+  // Create order
   const handleCreateOrder = async () => {
     if (orderItems.length === 0) { message.error('Add at least one product'); return }
     if (!selectedCustomerId && !newCustomer.name) { message.error('Select or enter a customer'); return }
 
-    let customerId = selectedCustomerId
-    if (!customerId && newCustomer.name) {
-      const { data: newCust, error: custErr } = await supabase.from('customers').insert([{
-        name: newCustomer.name, email: newCustomer.email, phone: newCustomer.phone,
-        country: shippingAddress.country || 'IN'
-      }]).select().single()
-      if (custErr) { message.error('Failed to create customer'); return }
-      customerId = newCust.id
-    }
-
-    const orderNumber = 'OFF-' + Date.now().toString(36).toUpperCase()
-    const { data: orderData, error: orderErr } = await supabase.from('orders').insert([{
-      order_number: orderNumber,
-      user_id: user?.id,
-      customer_id: customerId,
-      status: 'confirmed',
-      subtotal,
-      shipping_cost: orderMeta.shipping,
-      tax_amount: totalTax,
-      discount_amount: orderMeta.discount,
-      grand_total: finalGrandTotal,
-      currency: orderCurrency,
-      exchange_rate: exchangeRate,     // optionally store the rate used
-      shipping_address: shippingAddress,
-      billing_address: shippingAddress,
-      customer_note: orderMeta.notes,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    }]).select().single()
-    if (orderErr) { message.error('Failed to create order'); return }
-
-    const itemsToInsert = orderItems.map(item => ({
-      order_id: orderData.id,
-      product_id: item.product_id,
-      product_title: item.title,
-      product_sku: item.sku,
-      product_slug: '',
-      quantity: item.quantity,
-      unit_price: item.unit_price,
-      total_price: item.quantity * item.unit_price,
-      currency: orderCurrency,
-      discount_amount: 0,
-      tax_amount: item.price_mode === 'auto' ? item.breakdown.tax_amount * item.quantity : 0,
-      metadata: {
-        price_mode: item.price_mode,
-        breakdown: item.breakdown,
-        show_breakdown_to_customer: item.breakdown.show_breakdown_to_customer,
-        product_snapshot: item.product_snapshot
+    try {
+      let customerId = selectedCustomerId
+      if (!customerId && newCustomer.name) {
+        const { data: newCust, error: custErr } = await supabase.from('customers').insert([{
+          name: newCustomer.name, email: newCustomer.email, phone: newCustomer.phone,
+          country: shippingAddress.country || 'IN'
+        }]).select().single()
+        if (custErr) { message.error('Failed to create customer'); return }
+        customerId = newCust.id
       }
-    }))
-    await supabase.from('order_items').insert(itemsToInsert)
 
-    const validTaxLines = taxLines.filter(tl => tl.tax_type && tl.rate > 0)
-    if (validTaxLines.length > 0) {
-      const taxRows = validTaxLines.map(tl => ({
+      const orderNumber = 'OFF-' + Date.now().toString(36).toUpperCase()
+      const { data: orderData, error: orderErr } = await supabase.from('orders').insert([{
+        order_number: orderNumber,
+        user_id: user?.id,
+        customer_id: customerId,
+        status: 'confirmed',
+        subtotal,
+        shipping_cost: orderMeta.shipping,
+        tax_amount: totalTax,
+        discount_amount: orderMeta.discount,
+        grand_total: finalGrandTotal,
+        currency: orderCurrency,
+        exchange_rate: exchangeRate,
+        shipping_address: shippingAddress,
+        billing_address: shippingAddress,
+        customer_note: orderMeta.notes,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }]).select().single()
+      if (orderErr) { message.error('Failed to create order'); return }
+
+      const itemsToInsert = orderItems.map(item => ({
         order_id: orderData.id,
-        tax_type: tl.tax_type,
-        tax_rate: tl.rate,
-        taxable_amount: subtotal,
-        tax_amount: subtotal * tl.rate / 100,
-        currency: orderCurrency
+        product_id: item.product_id,
+        product_title: item.title,
+        product_sku: item.sku,
+        product_slug: '',
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        total_price: item.quantity * item.unit_price,
+        currency: orderCurrency,
+        discount_amount: 0,
+        tax_amount: 0,
+        metadata: {
+          price_mode: item.price_mode,
+          breakdown: item.breakdown,
+          show_breakdown_to_customer: item.breakdown.show_breakdown_to_customer,
+          product_snapshot: item.product_snapshot
+        }
       }))
-      await supabase.from('order_tax_lines').insert(taxRows)
+      await supabase.from('order_items').insert(itemsToInsert)
+
+      const validTaxLines = taxLines.filter(tl => tl.tax_type && tl.rate > 0)
+      if (validTaxLines.length > 0) {
+        const taxRows = validTaxLines.map(tl => ({
+          order_id: orderData.id,
+          tax_type: tl.tax_type,
+          tax_rate: tl.rate,
+          taxable_amount: subtotal,
+          tax_amount: subtotal * tl.rate / 100,
+          currency: orderCurrency
+        }))
+        await supabase.from('order_tax_lines').insert(taxRows)
+      }
+
+      const invoiceNumber = 'INV-' + orderNumber + '-' + Math.random().toString(36).substring(2, 6)
+      await supabase.from('invoices').insert([{
+        order_id: orderData.id,
+        invoice_number: invoiceNumber,
+        status: 'unpaid',
+        subtotal,
+        tax_amount: totalTax,
+        shipping_cost: orderMeta.shipping,
+        total: finalGrandTotal,
+        currency: orderCurrency
+      }])
+
+      message.success('Offline order created')
+      // Reset
+      setOrderItems([])
+      setSelectedCustomerId(null)
+      setNewCustomer({ name: '', email: '', phone: '' })
+      setShippingAddress({ full_name: '', line1: '', city: '', state: '', postal_code: '', country: 'IN', phone: '' })
+      setOrderMeta({ shipping: 0, discount: 0, notes: '' })
+      setTaxLines([{ tax_type: 'CGST', rate: 1.5 }, { tax_type: 'SGST', rate: 1.5 }])
+      setOrderCurrency('INR')
+      setExchangeRate(1)
+      onSuccess()
+      onClose()
+    } catch (err) {
+      console.error(err)
+      message.error('Failed to create order: ' + err.message)
     }
-
-    const invoiceNumber = 'INV-' + orderNumber + '-' + Math.random().toString(36).substring(2, 6)
-    await supabase.from('invoices').insert([{
-      order_id: orderData.id,
-      invoice_number: invoiceNumber,
-      status: 'unpaid',
-      subtotal,
-      tax_amount: totalTax,
-      shipping_cost: orderMeta.shipping,
-      total: finalGrandTotal,
-      currency: orderCurrency
-    }])
-
-    message.success('Offline order created')
-    // Reset
-    setOrderItems([])
-    setSelectedCustomerId(null)
-    setNewCustomer({ name: '', email: '', phone: '' })
-    setShippingAddress({ full_name: '', line1: '', city: '', state: '', postal_code: '', country: 'IN', phone: '' })
-    setOrderMeta({ shipping: 0, discount: 0, notes: '' })
-    setTaxLines([{ tax_type: 'CGST', rate: 1.5 }, { tax_type: 'SGST', rate: 1.5 }])
-    setOrderCurrency('INR')
-    setExchangeRate(1)
-    onSuccess()
-    onClose()
   }
 
   return (
@@ -349,14 +436,31 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
           </Col>
           {orderCurrency !== 'INR' && (
             <Col xs={24} sm={12}>
-              <Form.Item label={`Exchange Rate (1 INR = ? ${orderCurrency})`}>
+              <Form.Item
+                label={
+                  <Space>
+                    <span>Exchange Rate (1 INR = ? {orderCurrency})</span>
+                    {rateLoading && <Spin size="small" />}
+                    {rateSource === 'fallback' && <Tag color="orange">offline</Tag>}
+                    {rateSource === 'api' && <Tag color="green">live</Tag>}
+                    {rateSource === 'manual' && <Tag color="blue">manual</Tag>}
+                  </Space>
+                }
+              >
                 <InputNumber
                   min={0}
                   step={0.0001}
                   value={exchangeRate}
-                  onChange={val => setExchangeRate(val || 1)}
+                  onChange={val => {
+                    setExchangeRate(val || 1)
+                    setRateSource('manual')
+                  }}
                   style={{ width: '100%' }}
+                  disabled={rateLoading}
                 />
+                <Button size="small" onClick={fetchExchangeRate} style={{ marginTop: 4 }}>
+                  Refresh Rate
+                </Button>
               </Form.Item>
             </Col>
           )}
@@ -467,7 +571,6 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
               }
             >
               <Row gutter={[12, 12]}>
-                {/* Quantity */}
                 <Col xs={24} sm={6}>
                   <Form.Item label="Quantity">
                     <InputNumber min={1} value={item.quantity}
@@ -475,7 +578,6 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
                   </Form.Item>
                 </Col>
 
-                {/* Price Mode */}
                 <Col xs={24} sm={10}>
                   <Form.Item label="Price Mode">
                     <Radio.Group
@@ -490,7 +592,6 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
                   </Form.Item>
                 </Col>
 
-                {/* Manual Price Input (only when manual) */}
                 {item.price_mode === 'manual' && (
                   <Col xs={24} sm={8}>
                     <Form.Item label={`Final Price (${orderCurrency})`}>
@@ -504,7 +605,6 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
                   </Col>
                 )}
 
-                {/* Breakdown only when auto */}
                 {item.price_mode === 'auto' && (
                   <>
                     <Col span={24}><Text strong>💎 Diamonds</Text></Col>
@@ -571,18 +671,6 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
                         <InputNumber value={item.breakdown.profit_amount} readOnly style={{ width: '100%' }} />
                       </Form.Item>
                     </Col>
-
-                    <Col xs={24} sm={12}>
-                      <Form.Item label="Tax Rate (%)">
-                        <InputNumber value={item.breakdown.tax_rate}
-                          onChange={val => updateBreakdown(item.product_id, 'tax_rate', val)} style={{ width: '100%' }} />
-                      </Form.Item>
-                    </Col>
-                    <Col xs={24} sm={12}>
-                      <Form.Item label="Tax Amount">
-                        <InputNumber value={item.breakdown.tax_amount} readOnly style={{ width: '100%' }} />
-                      </Form.Item>
-                    </Col>
                   </>
                 )}
 
@@ -628,7 +716,7 @@ export default function CreateOrderModal({ open, onClose, onSuccess, user }) {
           </Col>
         </Row>
 
-        {/* Tax Breakdown (applies to whole order) */}
+        {/* Tax Breakdown */}
         <Divider>Tax Breakdown</Divider>
         {taxLines.map((tl, idx) => (
           <Row gutter={[8, 8]} key={idx} style={{ marginBottom: 8 }}>

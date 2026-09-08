@@ -6,7 +6,6 @@ import {
 import {
   SearchOutlined, ReloadOutlined, PlusOutlined,
   EditOutlined, DeleteOutlined, AppstoreOutlined, MoreOutlined,
-  UploadOutlined,
 } from '@ant-design/icons'
 import { supabase } from '../lib/supabase'
 import { uploadFile, getAssetUrl, generateProductFileName } from '../utilities/storage'
@@ -21,31 +20,39 @@ export default function Categories() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editingCat, setEditingCat] = useState(null)
   const [form] = Form.useForm()
-  const [fileList, setFileList] = useState([])   // for category image
+
+  // Separate state for new file and existing image URL
+  const [selectedFile, setSelectedFile] = useState(null)       // File object to upload
+  const [existingImageUrl, setExistingImageUrl] = useState(null) // current image_url from DB
 
   const fetchCategories = async () => {
     setLoading(true)
-    const { data, error } = await supabase
-      .from('categories')
-      .select('*, parent:parent_id ( id, name )')
-      .order('sort_order', { ascending: true })
+    try {
+      const { data, error } = await supabase
+        .from('categories')
+        .select('*, parent:parent_id ( id, name )')
+        .order('sort_order', { ascending: true })
 
-    if (error) {
+      if (error) throw error
+      setCategories(data || [])
+    } catch (err) {
+      console.error('Fetch categories error:', err)
       message.error('Failed to load categories')
+    } finally {
       setLoading(false)
-      return
     }
-    setCategories(data || [])
-    setLoading(false)
   }
 
-  useEffect(() => { fetchCategories() }, [])
+  useEffect(() => {
+    fetchCategories()
+  }, [])
 
   const handleAdd = () => {
     setEditingCat(null)
     form.resetFields()
     form.setFieldsValue({ trade_type: 'both', sort_order: 0 })
-    setFileList([])   // clear any previous image
+    setSelectedFile(null)
+    setExistingImageUrl(null)
     setModalOpen(true)
   }
 
@@ -59,62 +66,66 @@ export default function Categories() {
       trade_type: record.trade_type || 'both',
       sort_order: record.sort_order || 0,
     })
-    // Show existing image if available
-    if (record.image_url) {
-      setFileList([{
-        uid: '-1',
-        name: 'current-image',
-        status: 'done',
-        url: getAssetUrl(record.image_url),
-      }])
-    } else {
-      setFileList([])
-    }
+    setSelectedFile(null)
+    setExistingImageUrl(record.image_url || null)
     setModalOpen(true)
   }
 
   const handleDelete = async (id) => {
-    const { error } = await supabase.from('categories').delete().eq('id', id)
-    if (error) {
-      message.error('Delete failed: category may be in use')
-    } else {
+    try {
+      const { error } = await supabase.from('categories').delete().eq('id', id)
+      if (error) throw error
       message.success('Category deleted')
       fetchCategories()
+    } catch (err) {
+      console.error('Delete error:', err)
+      message.error('Delete failed: category may be in use')
     }
   }
 
   const handleSubmit = async () => {
-    const values = await form.validateFields()
-    let imageUrl = editingCat?.image_url || null
+    try {
+      const values = await form.validateFields()
+      let imageUrl = null
 
-    // Upload new image if present
-    if (fileList.length > 0 && fileList[0].originFileObj) {
-      try {
-        const file = fileList[0].originFileObj
-        const newFileName = generateProductFileName(file.name, values.name || 'category')
-        const renamedFile = new File([file], newFileName, { type: file.type })
-        const relativePath = await uploadFile(renamedFile, 'categories')
-        imageUrl = relativePath   // store relative path
-      } catch (err) {
-        message.error(`Image upload failed: ${err.message}`)
-        return
+      // Upload new file if selected
+      if (selectedFile) {
+        try {
+          const newFileName = generateProductFileName(selectedFile.name, values.name || 'category')
+          const renamedFile = new File([selectedFile], newFileName, { type: selectedFile.type })
+          imageUrl = await uploadFile(renamedFile, 'categories')
+        } catch (uploadErr) {
+          console.error('Upload error:', uploadErr)
+          message.error(`Image upload failed: ${uploadErr.message}`)
+          return // stop further processing
+        }
+      } else if (existingImageUrl) {
+        // No new file, keep existing image
+        imageUrl = existingImageUrl
       }
-    }
+      // else imageUrl remains null (no image or removed)
 
-    const payload = { ...values, image_url: imageUrl }
-    if (editingCat) {
-      const { error } = await supabase.from('categories').update(payload).eq('id', editingCat.id)
-      if (error) { message.error('Update failed'); return }
-      message.success('Category updated')
-    } else {
-      const { error } = await supabase.from('categories').insert([payload])
-      if (error) { message.error('Insert failed'); return }
-      message.success('Category added')
+      const payload = { ...values, image_url: imageUrl }
+
+      if (editingCat) {
+        const { error } = await supabase.from('categories').update(payload).eq('id', editingCat.id)
+        if (error) throw error
+        message.success('Category updated')
+      } else {
+        const { error } = await supabase.from('categories').insert([payload])
+        if (error) throw error
+        message.success('Category added')
+      }
+
+      setModalOpen(false)
+      form.resetFields()
+      setSelectedFile(null)
+      setExistingImageUrl(null)
+      fetchCategories()
+    } catch (err) {
+      console.error('Submit error:', err)
+      message.error('Failed to save category. Please check the form and try again.')
     }
-    setModalOpen(false)
-    form.resetFields()
-    setFileList([])
-    fetchCategories()
   }
 
   const columns = [
@@ -247,6 +258,13 @@ export default function Categories() {
     )
   })
 
+  // For Upload display list
+  const uploadFileList = selectedFile
+    ? [{ uid: '-1', name: selectedFile.name, status: 'done', url: URL.createObjectURL(selectedFile) }]
+    : existingImageUrl
+      ? [{ uid: '-1', name: 'current-image', status: 'done', url: getAssetUrl(existingImageUrl) }]
+      : []
+
   return (
     <div>
       <Row justify="space-between" align="middle" gutter={[8, 16]} style={{ marginBottom: 24 }}>
@@ -300,6 +318,7 @@ export default function Categories() {
         okText={editingCat ? 'Update' : 'Create'}
         destroyOnClose
         width={600}
+        confirmLoading={loading} // optional: show loading on OK button
       >
         <Form form={form} layout="vertical">
           <Row gutter={16}>
@@ -357,16 +376,20 @@ export default function Categories() {
           <Form.Item label="Image">
             <Upload
               listType="picture-card"
-              fileList={fileList}
+              fileList={uploadFileList}
               maxCount={1}
               accept="image/*"
               beforeUpload={(file) => {
-                setFileList([file])
-                return false
+                setSelectedFile(file)
+                setExistingImageUrl(null) // new file replaces any existing image
+                return false // prevent auto upload
               }}
-              onRemove={() => setFileList([])}
+              onRemove={() => {
+                setSelectedFile(null)
+                setExistingImageUrl(null) // allow removing image entirely
+              }}
             >
-              {fileList.length >= 1 ? null : (
+              {uploadFileList.length >= 1 ? null : (
                 <div>
                   <PlusOutlined />
                   <div style={{ marginTop: 8 }}>Upload</div>

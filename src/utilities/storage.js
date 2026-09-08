@@ -18,33 +18,23 @@ function getPublicBaseUrl() {
 
 /**
  * Converts a relative storage path to a full public URL.
+ * If the input is already a full URL (http/https), it returns it unchanged.
+ * Otherwise, it cleans the relative path and prepends the public base.
  */
 export function getAssetUrl(relativePath) {
   if (!relativePath) return null
 
+  // Already a full URL? Return as-is.
+  if (relativePath.startsWith('http://') || relativePath.startsWith('https://')) {
+    return relativePath
+  }
+
   const publicBase = getPublicBaseUrl()
 
-  // Already a correct public URL? Return as-is.
-  if (relativePath.startsWith(publicBase)) return relativePath
+  // Remove any leading "/uploads/" prefix or leading slash
+  let cleanPath = relativePath.replace(/^\/uploads\//, '').replace(/^\//, '')
 
-  // If it's a full URL (http/https), extract the relative path after the folder
-  try {
-    const url = new URL(relativePath)
-    const match = url.pathname.match(
-      /\/(products|avatars|hero|sales|categories|brands|customers|employees|documents|invoices|videos)\/.*/
-    )
-    if (match) {
-      return `${publicBase}/${match[0].replace(/^\//, '')}`
-    }
-    return `${publicBase}/${url.pathname.replace(/^\//, '')}`
-  } catch {
-    // Not a full URL → treat as relative
-    // 🔥 Remove any leading "/uploads/" prefix if present
-    let cleanPath = relativePath.replace(/^\/uploads\//, '')
-    // Ensure no leading slash remains
-    cleanPath = cleanPath.replace(/^\//, '')
-    return `${publicBase}/${cleanPath}`
-  }
+  return `${publicBase}/${cleanPath}`
 }
 
 /**
@@ -94,6 +84,7 @@ export async function uploadFile(file, folder = 'products') {
     const urlObj = new URL(data.url)
     return urlObj.pathname.replace(/^\//, '')   // "products/file.jpg"
   } catch {
+    // If data.url is not a valid URL, assume it's already relative
     return data.url
   }
 }

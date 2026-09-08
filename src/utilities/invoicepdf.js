@@ -3,12 +3,11 @@ import autoTable from 'jspdf-autotable'
 
 // ─── Currency Configuration ─────────────────────────────────
 const CURRENCY_CONFIG = {
-  INR: { symbol: '₹', name: 'Rupee', subunit: 'Paisa', locale: 'en-IN', decimals: 2 },
-  USD: { symbol: '$', name: 'Dollar', subunit: 'Cent', locale: 'en-US', decimals: 2 },
-  EUR: { symbol: '€', name: 'Euro', subunit: 'Cent', locale: 'de-DE', decimals: 2 },
-  GBP: { symbol: '£', name: 'Pound', subunit: 'Penny', locale: 'en-GB', decimals: 2 },
-  AED: { symbol: 'د.إ', name: 'Dirham', subunit: 'Fils', locale: 'ar-AE', decimals: 2 },
-  // Add more as needed
+  INR: { symbol: 'Rs. ', name: 'Rupee', subunit: 'Paisa', locale: 'en-IN', decimals: 2, numbering: 'indian' },
+  USD: { symbol: '$', name: 'Dollar', subunit: 'Cent', locale: 'en-US', decimals: 2, numbering: 'international' },
+  EUR: { symbol: '€', name: 'Euro', subunit: 'Cent', locale: 'de-DE', decimals: 2, numbering: 'international' },
+  GBP: { symbol: '£', name: 'Pound', subunit: 'Penny', locale: 'en-GB', decimals: 2, numbering: 'international' },
+  AED: { symbol: 'د.إ', name: 'Dirham', subunit: 'Fils', locale: 'ar-AE', decimals: 2, numbering: 'international' },
 }
 
 const DEFAULT_CURRENCY = 'INR'
@@ -30,16 +29,28 @@ function parseAddress(addr) {
 
 // ─── Currency Formatter ─────────────────────────────────────
 function formatCurrency(amount, currency = DEFAULT_CURRENCY) {
+  const num = Number(amount)
+  if (isNaN(num)) return ''
   const config = getCurrencyConfig(currency)
+  // Use Intl for number formatting, but we'll manually add the symbol for INR
+  // to avoid unsupported glyph issues in PDF.
+  const numberString = new Intl.NumberFormat(config.locale, {
+    minimumFractionDigits: config.decimals,
+    maximumFractionDigits: config.decimals,
+  }).format(num)
+  if (currency === 'INR') {
+    return `Rs. ${numberString}`
+  }
+  // For other currencies, use the native currency formatting with symbol.
   return new Intl.NumberFormat(config.locale, {
     style: 'currency',
     currency,
     minimumFractionDigits: config.decimals,
     maximumFractionDigits: config.decimals,
-  }).format(Number(amount))
+  }).format(num)
 }
 
-// ─── Number to Words (Indian Numbering System) ─────────────
+// ─── Number to Words (Supports Indian & International) ──────
 function numberToWords(amount, currency = DEFAULT_CURRENCY) {
   const num = Number(amount)
   if (isNaN(num)) return ''
@@ -85,17 +96,35 @@ function numberToWords(amount, currency = DEFAULT_CURRENCY) {
     return result.trim()
   }
 
-  let result = convertIndian(integerPart) + ' ' + config.name + (integerPart !== 1 ? 's' : '')
-  if (decimalPart > 0) {
-    result += ' and ' + convertIndian(decimalPart) + ' ' + config.subunit + (decimalPart !== 1 ? 's' : '')
+  function convertInternational(n) {
+    if (n === 0) return 'Zero'
+    let result = ''
+    const billion = Math.floor(n / 1000000000)
+    const million = Math.floor((n % 1000000000) / 1000000)
+    const thousand = Math.floor((n % 1000000) / 1000)
+    const hundred = n % 1000
+
+    if (billion > 0) result += convertHundreds(billion) + ' Billion '
+    if (million > 0) result += convertHundreds(million) + ' Million '
+    if (thousand > 0) result += convertHundreds(thousand) + ' Thousand '
+    if (hundred > 0) result += convertHundreds(hundred)
+
+    return result.trim()
   }
-  return result.replace(/\s+/g, ' ').trim()
+
+  const convert = config.numbering === 'indian' ? convertIndian : convertInternational
+  let words = convert(integerPart) + ' ' + config.name + (integerPart !== 1 ? 's' : '')
+  if (decimalPart > 0) {
+    words += ' and ' + convert(decimalPart) + ' ' + config.subunit + (decimalPart !== 1 ? 's' : '')
+  }
+  words += ' Only'
+  return words.replace(/\s+/g, ' ').trim()
 }
 
 /**
  * Build product description.
  * - If price_mode is "manual", show only item name and final price.
- * - Otherwise (auto), show full breakdown from product_snapshot or fallback to product_details.
+ * - Otherwise (auto), show full breakdown.
  */
 function buildProductDescription(item, currency = DEFAULT_CURRENCY) {
   const metadata = item.metadata || {}
@@ -176,6 +205,7 @@ export function generateInvoicePDF({
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
 
   const pageWidth = doc.internal.pageSize.getWidth()
+  const pageHeight = doc.internal.pageSize.getHeight()
   const margin = 15
   let y = margin
 
@@ -202,11 +232,11 @@ export function generateInvoicePDF({
   ].filter(Boolean)
 
   doc.setFontSize(8)
-  let addrY = 12
+  let addrY = 10
   companyAddressLines.forEach(line => {
     if (line) {
       doc.text(line, pageWidth - margin, addrY, { align: 'right' })
-      addrY += 4
+      addrY += 3.5
     }
   })
 
@@ -334,6 +364,11 @@ export function generateInvoicePDF({
       6: { cellWidth: 26 },
       7: { cellWidth: 26 },
     },
+    didParseCell: (data) => {
+      if (data.section === 'body' && data.column.dataKey === 'title') {
+        data.cell.text = data.cell.raw // use raw string; autoTable will handle \n
+      }
+    },
   })
 
   y = doc.lastAutoTable.finalY + 10
@@ -399,7 +434,14 @@ export function generateInvoicePDF({
   }
 
   // ─── Footer ────────────────────────────────────────────────
-  y = Math.max(y + 15, 240)
+  const footerStartY = 240
+  if (y > footerStartY - 20) {
+    doc.addPage()
+    y = margin
+  } else {
+    y = Math.max(y + 15, footerStartY)
+  }
+
   doc.setFontSize(8).setTextColor(100).setFont('helvetica', 'italic')
   doc.text('Payment Terms: 100% advance unless credit terms agreed.', margin, y)
   y += 6
