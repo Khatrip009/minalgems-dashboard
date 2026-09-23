@@ -683,11 +683,11 @@ export default function Products() {
         const menu = {
           items: [
             {
-              key: 'edit',
-              icon: <EditOutlined />,
-              label: 'Edit',
-              onClick: () => handleEdit(record),
-            },
+            key: 'edit',
+            icon: <EditOutlined />,
+            label: 'Edit',
+            onClick: () => navigate(`/products/${record.id}/edit`),
+          },
             {
               key: 'images',
               icon: <FileImageOutlined />,
@@ -715,7 +715,10 @@ export default function Products() {
         return (
           <>
             <Space className="desktop-actions" style={{ display: 'none' }}>
-              <Button type="link" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
+              <Button
+                type="link" icon={<EditOutlined />}
+                onClick={() => navigate(`/products/${record.id}/edit`)}
+              >
                 Edit
               </Button>
               <Button type="link" icon={<FileImageOutlined />} onClick={() => {

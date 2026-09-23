@@ -25,6 +25,7 @@ import Reviews from './pages/Reviews'
 import NotificationsPage from './pages/NotificationsPage'
 import InboxPage from './pages/InboxPage'
 import CraftsmanStatement from './pages/CraftsmanStatement'
+import ProductForm from './pages/ProductForm'
 
 // --- Luxurious Jewellery Theme Tokens ---
 const themeTokens = {
@@ -54,8 +55,9 @@ export default function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route index element={<Dashboard />} />
-            <Route path="products" element={<Products />} />
-            <Route path="products/new" element={<ProductCreate />} />
+            <Route path="/products"           element={<Products />} />
+            <Route path="/products/new"       element={<ProductForm />} />
+            <Route path="/products/:id/edit"  element={<ProductForm />} />
             <Route path="categories" element={<Categories />} />
             <Route path="orders" element={<Orders />} />
             <Route path="orders/:id" element={<OrderDetail />} />
